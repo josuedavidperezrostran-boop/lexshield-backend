@@ -22,9 +22,22 @@ app = FastAPI(
     version="1.1.0",
 )
 
+_VERCEL_ORIGIN = "https://vercel.app"
+_VERCEL_ORIGIN_REGEX = r"https://([a-zA-Z0-9-]+\.)*vercel\.app"
+
+
+def _allowed_origins() -> list[str]:
+    origins = [_VERCEL_ORIGIN]
+    configured = (settings.frontend_origin or "").strip().rstrip("/")
+    if configured and configured not in origins:
+        origins.append(configured)
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=_allowed_origins(),
+    allow_origin_regex=_VERCEL_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],

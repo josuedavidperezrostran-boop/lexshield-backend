@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     access_token_secret: str = "change-me-in-production"
-    frontend_origin: str = "http://localhost:3000"
+    frontend_origin: str = "https://vercel.app"
     backend_origin: str = "http://localhost:8000"
     subscription_amount_cents: int = 100_000
     max_upload_bytes: int = 10 * 1024 * 1024
