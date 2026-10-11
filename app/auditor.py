@@ -70,7 +70,8 @@ def compile_partner_opinion(
         "Memorando del litigador (índice cronológico y contradicciones de foro):\n"
         f"{json.dumps(litigator_notes, ensure_ascii=False)}\n\n"
         "Conserve un hallazgo solo si el excerpt es cita literal del contrato y el número de artículo aparece en el texto. "
-        "Si la cita no puede localizarse, omita el hallazgo. "
+        "Si la cita no aparece, vuelva a leer esa página y las contiguas y cópiela de nuevo. "
+        "Si tras esa relectura sigue sin poder copiarse, omita el hallazgo. "
         "No declare ausente una materia que ya figure en definiciones, subincisos o anexos. "
         "No invente ni calcule una cifra que el contrato no escriba. Si falta, escriba exactamente \"No especificado\". "
         "El dictamen final va en español jurídico profesional.\n\n"
@@ -125,8 +126,9 @@ Hallazgos, solo si el texto los contiene. No invente una cifra, un porcentaje ni
 - Bloqueo subjetivo. Congelación, retención, vencimiento anticipado o resolución por mera sospecha o criterio subjetivo, sin resolución judicial ni prueba. severity high.
 - Toda otra pena o interés escrito. Repita el número tal como consta. No lo calcule de nuevo.
 
+{_ENTERPRISE_LOCK}
 {_LANGUAGE}
-Como máximo 20 hallazgos. Cada trampa crítica ocupa su propio elemento. Si no hay ninguno, findings es [].
+Como máximo 20 hallazgos. Cada trampa crítica ocupa su propio elemento. Está prohibido fundir dos exposiciones para acortar la lista. Si no hay ninguno, findings es [].
 """
 
 
@@ -139,8 +141,10 @@ Primero escriba chronology en ese orden. Cada elemento es un artículo, sección
 Después compare ese inicio con el final. Informe solo si dos sedes, fueros, leyes aplicables o sedes arbitrales no pueden cumplirse a la vez. Una pena, un plazo o un bloqueo no es contradicción de foro. article cita ambos números. excerpt reproduce el pasaje más gravoso.
 
 No informe penas, intereses, valoración, plazos ni bloqueos. No declare omisiones.
+Infiera el marco solo desde el texto: common law o derecho civil, y la sede que el contrato nombre. Compare las definiciones iniciales con las misceláneas y la cláusula de controversias del cierre. Cada contradicción de jurisdicción es una ficha propia. No invente una sede.
+{_ENTERPRISE_LOCK}
 {_LANGUAGE}
-Como máximo 6 contradicciones. Si el foro es único o no hay foro, contradictions es [].
+Como máximo 12 contradicciones. Si el foro es único o no hay foro, contradictions es [].
 """
 
 
@@ -165,6 +169,7 @@ Depuración, en este orden:
 15. Está prohibido fundir en una sola ficha, o dejar solo en el resumen, un interés exponencial por segundos y una cesión de código fuente por caída de red. Cada uno es un objeto distinto de risks. severity high. El título empieza por "Bandera roja crítica".
 16. Cargue el playbook antes de publicar. Si el foro no es el de Jurisdiccion_Permitida, o si un tope de responsabilidad queda por debajo de Limite_Responsabilidad_Aceptable, es riesgo crítico máximo. severity high.
 
+{_ENTERPRISE_LOCK}
 {_CITATION_RULE}
 {_LANGUAGE}
 metadata siempre presente. Si un dato no consta, escriba exactamente "{ABSENT}". No lo invente. Si hay pena o interés, refléjalo en fees junto con la contraprestación.
@@ -183,7 +188,7 @@ Antes de publicar, compare cada artículo temprano con las últimas páginas: co
 
 Matriz, obligatoria:
 - Plazos contra responsabilidades. Si un artículo temprano abre una ventana corta de reclamación y un artículo final impone responsabilidad perpetua, vitalicia o indefinida, es contradicción. severity high. origin "supervisor". article cita los dos números. El análisis dice qué caduca y qué no caduca.
-- Foro. Compare las definiciones iniciales con la cláusula de controversias del cierre. Si las sedes o las leyes no pueden cumplirse a la vez, es una ficha propia. No invente una sede que el texto no nombre.
+- Foro y marco. Infiera si el texto se rige por common law o por derecho civil, y nombre solo la sede que aparezca. Compare las definiciones iniciales con las misceláneas y la cláusula de controversias del cierre. Si las sedes o las leyes no pueden cumplirse a la vez, es una ficha propia. No invente una sede que el texto no nombre.
 - Fórmulas de precio. Si una variación menor extingue el precio, conserve la bandera roja crítica. La pérdida es el precio escrito en la cláusula. No la sustituya por un porcentaje que usted calcule.
 - Propiedad intelectual de cierre. Si el dictamen trae espionaje, cesión o captura de know-how posterior a la terminación, y el excerpt está en el contrato, está prohibido eliminarlo. Si falta y el contrato lo contiene, añádalo.
 - Exoneración por dolo. Si una limitación cubre el dolo, el fraude o la negligencia grave, consérvela como riesgo crítico máximo. Si falta y el contrato la contiene, añádala.
@@ -197,6 +202,7 @@ GRANULARIDAD — obligatoria. El resumen no sustituye a las fichas:
 - Si el dictamen previo narró ambas en un solo párrafo, sepárelas antes de publicar. summary puede citarlas, pero cada una sigue en risks.
 - Playbook. Si una cláusula de foro no es la Jurisdiccion_Permitida, o un tope de responsabilidad es inferior a Limite_Responsabilidad_Aceptable, publíquelo como riesgo crítico máximo. severity high.
 
+{_ENTERPRISE_LOCK}
 {_CITATION_RULE}
 No invente un excerpt. No declare ausente una materia que aparezca en definiciones, subincisos o anexos. No duplique el mismo par de artículos.
 
@@ -208,10 +214,22 @@ reasoning resume la matriz: qué pares comparó y qué conservó del dictamen an
 
 
 _CITATION_RULE = """
-CITA VERIFICABLE — obligatoria. Si no puede cumplirse, omita el riesgo:
-- pagina_exacta es el entero de la página cronológica, el de la marca [[PÁGINA n]] donde está la cita. No lo adivine.
-- seccion_articulo es el encabezado del artículo o de la cláusula, copiado del texto.
-- cita_literal_exacta es el fragmento contiguo, idéntico al excerpt. Si no puede copiarlo, no emita la ficha.
+TRÍADA VERIFICABLE — obligatoria en cada ficha de risks:
+- pagina_exacta es el entero cronológico de la marca [[PÁGINA n]] donde está la cita. No lo adivine.
+- seccion_articulo es el identificador literal del encabezado, copiado del texto.
+- cita_literal_exacta es el fragmento contiguo, idéntico al excerpt y al cuerpo del documento.
+- contexto_insercion_word copia las tres palabras que preceden a esa cita y las tres que la siguen, con el formato exacto "antes: una dos tres | despues: una dos tres".
+Si una cita no coincide con el cuerpo, vuelva a leer esa página y las contiguas y cópiela otra vez. Si tras esa relectura sigue sin poder copiarse de forma literal, no publique la ficha.
+"""
+
+
+_ENTERPRISE_LOCK = """
+AISLAMIENTO Y GRANULARIDAD — obligatorios:
+- Un solo pase del archivo completo, de la primera página al último anexo. Cada página pesa igual. No recorte el cierre para favorecer el inicio.
+- Está prohibido resumir, truncar o agrupar una exposición jurídica o financiera dentro de summary, reasoning o el análisis de otra ficha. Cada exposición es un objeto distinto del arreglo.
+- Detecte, cada una en su ficha, una contradicción entre definiciones iniciales y la cláusula de controversias del cierre, un plazo operativo inferior a cinco días hábiles unido a daños liquidados, una tasa de capitalización o interés compuesto, y una transmisión de título, equipos o participaciones a precio simbólico o nominal bajo fuerza mayor, terminación o liquidación.
+- No invente un porcentaje, un importe, una página ni una sede para completar un campo. Si no está escrito, use "No especificado".
+- El dictamen se serializa en memoria, en un JSON en español jurídico, y el documento no se retiene.
 """
 
 
@@ -225,7 +243,7 @@ _LANGUAGE = f"""
 IDIOMA — obligatorio:
 - Todo el JSON en español jurídico profesional.
 - Aunque el contrato esté en otro idioma, title, analysis, suggestion, alternative_drafting, summary y la ficha van en español.
-- excerpt y cita_literal_exacta son la excepción: cópielos literal, sin parafrasear.
+- excerpt, cita_literal_exacta y contexto_insercion_word son la excepción: cópielos literal, sin parafrasear.
 - Está prohibido inventar, calcular o suponer un porcentaje, un importe, una página o una sede para rellenar un campo. Si la variable no está escrita, use "{ABSENT}".
 - Un solo objeto JSON. Sin markdown, sin comillas invertidas y sin texto fuera del objeto.
 """
@@ -341,6 +359,7 @@ PARTNER_SCHEMA: dict[str, Any] = {
                     "pagina_exacta",
                     "seccion_articulo",
                     "cita_literal_exacta",
+                    "contexto_insercion_word",
                 ],
                 "properties": {
                     "id": {"type": "string"},
@@ -355,6 +374,7 @@ PARTNER_SCHEMA: dict[str, Any] = {
                     "pagina_exacta": {"type": "integer"},
                     "seccion_articulo": {"type": "string"},
                     "cita_literal_exacta": {"type": "string"},
+                    "contexto_insercion_word": {"type": "string"},
                 },
             },
         },
@@ -391,6 +411,7 @@ class RiskFinding(BaseModel):
     pagina_exacta: int = Field(default=1, ge=1)
     seccion_articulo: str = "Cláusula citada"
     cita_literal_exacta: str = ""
+    contexto_insercion_word: str = ABSENT
 
 
 class AuditResult(BaseModel):
@@ -1774,6 +1795,28 @@ def _playbook_card(risks: list[Any], article: str, needle: str) -> bool:
     return False
 
 
+def _word_anchor(quote: str, contract_text: str) -> str:
+    """Three literal words before and after the quote, for a later Word insertion hook."""
+    quote_words = " ".join(quote.split()).split()
+    if not quote_words:
+        return ABSENT
+    body = re.sub(r"\[\[PÁGINA \d+\]\]", " ", contract_text)
+    words = body.split()
+    width = len(quote_words)
+    start = -1
+    for index in range(0, len(words) - width + 1):
+        if words[index : index + width] == quote_words:
+            start = index
+            break
+    if start < 0:
+        return ABSENT
+    before = words[max(0, start - 3) : start]
+    after = words[start + width : start + width + 3]
+    left = " ".join(before) if before else ABSENT
+    right = " ".join(after) if after else ABSENT
+    return f"antes: {left} | despues: {right}"
+
+
 def _stamp_citations(risks: Any, contract_text: str) -> None:
     if not isinstance(risks, list):
         return
@@ -1785,6 +1828,7 @@ def _stamp_citations(risks: Any, contract_text: str) -> None:
         risk["pagina_exacta"] = page
         risk["seccion_articulo"] = section
         risk["cita_literal_exacta"] = excerpt[:500]
+        risk["contexto_insercion_word"] = _word_anchor(excerpt[:500], contract_text)
 
 
 def _citation_context(excerpt: str, contract_text: str, article: str) -> tuple[int, str]:
@@ -1859,6 +1903,7 @@ def _drop_unanchored(risks: Any, contract_text: str) -> list[dict[str, Any]]:
         if bodies and not any(_excerpt_in_contract(quote, body) for body in bodies):
             continue
         risk["cita_literal_exacta"] = quote
+        risk["contexto_insercion_word"] = _word_anchor(quote, contract_text)
         kept.append(risk)
     return kept
 
