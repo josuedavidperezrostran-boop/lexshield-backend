@@ -27,6 +27,7 @@ class AccessResponse(BaseModel):
 
 FOUNDER_COUPON_ID = "founder80_first_month"
 FOUNDER_PROMO_CODE = "FOUNDER80"
+LIVE_APP = "https://frontend-1-lex-shield2.vercel.app"
 
 
 def ensure_founder_promotion() -> None:
@@ -86,9 +87,9 @@ def create_checkout_session() -> CheckoutResponse:
         session = stripe.checkout.Session.create(
             mode="subscription",
             success_url=(
-                f"{settings.frontend_origin}/success?session_id={{CHECKOUT_SESSION_ID}}"
+                f"{LIVE_APP}/success?session_id={{CHECKOUT_SESSION_ID}}"
             ),
-            cancel_url=f"{settings.frontend_origin}/cancel",
+            cancel_url=f"{LIVE_APP}/#pricing",
             billing_address_collection="required",
             allow_promotion_codes=True,
             line_items=[
@@ -204,7 +205,7 @@ def create_portal_session(authorization: str | None = Header(default=None)) -> P
         configuration = ensure_portal_configuration()
         portal = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=f"{settings.frontend_origin}/auditor",
+            return_url=f"{LIVE_APP}/auditor",
             configuration=configuration,
         )
     except Exception as exc:  # noqa: BLE001
