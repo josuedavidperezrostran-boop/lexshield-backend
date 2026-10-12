@@ -22,16 +22,22 @@ class VerifyRequest(BaseModel):
 class AccessResponse(BaseModel):
     access_token: str
     plan: str = "professional"
-    amount_usd: int = 1000
+    amount_usd: int = 100
 
 
 FOUNDER_COUPON_ID = "founder80_first_month"
 FOUNDER_PROMO_CODE = "FOUNDER80"
-LIVE_APP = "https://frontend-1-lex-shield2.vercel.app"
+DEFAULT_APP = "https://frontend-1-lex-shield2.vercel.app"
+
+
+def app_base() -> str:
+    """Public site origin. FRONTEND_ORIGIN overrides this when a custom domain is attached."""
+    configured = settings.frontend_origin.strip().rstrip("/")
+    return configured or DEFAULT_APP
 
 
 def ensure_founder_promotion() -> None:
-    """80% off the first invoice only. Month two bills the full $1,000."""
+    """80% off the first invoice only. Month two bills the full $100."""
     try:
         coupon = stripe.Coupon.retrieve(FOUNDER_COUPON_ID)
     except stripe.InvalidRequestError:
@@ -87,9 +93,9 @@ def create_checkout_session() -> CheckoutResponse:
         session = stripe.checkout.Session.create(
             mode="subscription",
             success_url=(
-                f"{LIVE_APP}/success?session_id={{CHECKOUT_SESSION_ID}}"
+                f"{app_base()}/success?session_id={{CHECKOUT_SESSION_ID}}"
             ),
-            cancel_url=f"{LIVE_APP}/#pricing",
+            cancel_url=f"{app_base()}/#pricing",
             billing_address_collection="required",
             allow_promotion_codes=True,
             line_items=[
@@ -97,7 +103,7 @@ def create_checkout_session() -> CheckoutResponse:
                     "quantity": 1,
                     "price_data": {
                         "currency": "usd",
-                        "unit_amount": settings.subscription_amount_cents,
+                        "unit_amount": settings.subscription_amount_cents,  # 10000 = $100 USD / month
                         "recurring": {"interval": "month"},
                         "product_data": {
                             "name": "LexShield Professional",
@@ -205,7 +211,7 @@ def create_portal_session(authorization: str | None = Header(default=None)) -> P
         configuration = ensure_portal_configuration()
         portal = stripe.billing_portal.Session.create(
             customer=customer_id,
-            return_url=f"{LIVE_APP}/auditor",
+            return_url=f"{app_base()}/auditor",
             configuration=configuration,
         )
     except Exception as exc:  # noqa: BLE001

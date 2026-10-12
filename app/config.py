@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     access_token_secret: str = "change-me-in-production"
     frontend_origin: str = "https://frontend-1-lex-shield2.vercel.app"
     backend_origin: str = "http://localhost:8000"
-    subscription_amount_cents: int = 100_000
+    subscription_amount_cents: int = 10_000
     max_upload_bytes: int = 10 * 1024 * 1024
     # One gpt-4o pass. Leaves room inside the 128k window for the system prompt and the reply.
     max_contract_chars: int = 320_000
