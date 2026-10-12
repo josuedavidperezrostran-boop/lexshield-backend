@@ -24,7 +24,11 @@ ABSENT = "No especificado"
 _ARTICLE_NUM = re.compile(r"\d+(?:\.\d+)+|\d+")
 
 
-def scan_financial_and_ip(contract_text: str, filename: str) -> dict[str, Any]:
+def scan_financial_and_ip(
+    contract_text: str,
+    filename: str,
+    reference_map: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Mesa del auditor: pasivos, penas y transferencias de propiedad intelectual."""
     client = _client()
     user = _contract_message(
@@ -36,11 +40,16 @@ def scan_financial_and_ip(contract_text: str, filename: str) -> dict[str, Any]:
         "y plazos de cumplimiento inferiores a cinco días hábiles unidos a daños liquidados de gran cuantía. "
         "Cada hallazgo es una ficha propia. Copie solo cifras que el texto escriba. "
         "Si una variable no está especificada, escriba exactamente \"No especificado\" y no la calcule."
+        f"{_map_note(reference_map)}"
     )
     return _agent(client, "lexshield_auditor", AUDITOR_SCHEMA, _auditor_prompt(), user)
 
 
-def scan_jurisdiction(contract_text: str, filename: str) -> dict[str, Any]:
+def scan_jurisdiction(
+    contract_text: str,
+    filename: str,
+    reference_map: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Mesa del litigador: índice cronológico y contradicciones de foro."""
     client = _client()
     user = _contract_message(
@@ -49,6 +58,7 @@ def scan_jurisdiction(contract_text: str, filename: str) -> dict[str, Any]:
         "Antes de informar contradicciones, liste en orden cronológico cada artículo, definición y subinciso. "
         "Compare el foro y la ley de las definiciones iniciales con las cláusulas de ejecución del final. "
         "Informe solo sedes, fueros o leyes que no puedan cumplirse a la vez, citando ambos artículos."
+        f"{_map_note(reference_map)}"
     )
     return _agent(client, "lexshield_litigador", LITIGATOR_SCHEMA, _litigator_prompt(), user)
 
@@ -58,6 +68,7 @@ def compile_partner_opinion(
     filename: str,
     auditor_notes: dict[str, Any],
     litigator_notes: dict[str, Any],
+    reference_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Mesa del socio: depura alucinaciones y publica el dictamen."""
     client = _client()
@@ -76,6 +87,7 @@ def compile_partner_opinion(
         "No invente ni calcule una cifra que el contrato no escriba. Si falta, escriba exactamente \"No especificado\". "
         "El dictamen final va en español jurídico profesional.\n\n"
         f"{_control_note(contract_text)}"
+        f"{_map_note(reference_map)}"
     )
     return _agent(client, "lexshield_socio", PARTNER_SCHEMA, _partner_prompt(), user)
 
@@ -84,6 +96,7 @@ def supervise_matrix(
     contract_text: str,
     filename: str,
     consolidated: dict[str, Any],
+    reference_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Mesa del socio senior: matriz de contradicciones entre el inicio y el cierre."""
     client = _client()
@@ -99,10 +112,11 @@ def supervise_matrix(
         f"{_matrix_note(contract_text)}\n\n"
         "Publique el dictamen final. Conserve todo hallazgo de propiedad intelectual, espionaje o fórmula de precio "
         "cuyo excerpt conste en el contrato. Añada las contradicciones de plazo entre artículos tempranos y finales."
+        f"{_map_note(reference_map)}"
     )
     raw = _agent(client, "lexshield_supervisor", PARTNER_SCHEMA, _senior_prompt(), user)
     try:
-        return _publish(raw, contract_text)
+        return _publish(raw, contract_text, reference_map)
     except Exception as extra:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
@@ -167,7 +181,7 @@ Depuración, en este orden:
 13. Está prohibido descartar una limitación o exoneración que cubra el dolo, el fraude o la negligencia grave. severity high. El título empieza por "Riesgo crítico máximo". Si la cláusula ya reserva esas conductas, no es hallazgo.
 14. Está prohibido descartar una fuerza mayor, terminación anticipada o liquidación que transmita activos a precio simbólico o a valor en libros. severity high. El título empieza por "Bandera roja crítica". La alternativa ordena suspensión o terminación equitativa y valor de mercado.
 15. Está prohibido fundir en una sola ficha, o dejar solo en el resumen, un interés exponencial por segundos y una cesión de código fuente por caída de red. Cada uno es un objeto distinto de risks. severity high. El título empieza por "Bandera roja crítica".
-16. Cargue el playbook antes de publicar. Si el foro no es el de Jurisdiccion_Permitida, o si un tope de responsabilidad queda por debajo de Limite_Responsabilidad_Aceptable, es riesgo crítico máximo. severity high.
+16. Clasificación por intención, en dos pasos. Primero nombre la intención de la sección. Después evalúe el cumplimiento. Si la intención es cumplimiento internacional de privacidad, como GDPR, RGPD o CCPA, está prohibido imponer un tribunal local o una plantilla de foro.
 
 {_ENTERPRISE_LOCK}
 {_CITATION_RULE}
@@ -200,7 +214,7 @@ GRANULARIDAD — obligatoria. El resumen no sustituye a las fichas:
 - Interés variable. Si una tasa se indexa a una métrica volátil o se escribe como potencia o capitalización, publíquelo como tarjeta propia. severity high. El título empieza por "Bandera roja crítica". Copie la fórmula. No calcule un importe que el texto no contenga.
 - Cesión por caída. Si una indisponibilidad de red transfiere código fuente, software o propiedad intelectual, publíquelo como otra tarjeta propia. severity high. El título empieza por "Bandera roja crítica" y repite el plazo que el texto escribe.
 - Si el dictamen previo narró ambas en un solo párrafo, sepárelas antes de publicar. summary puede citarlas, pero cada una sigue en risks.
-- Playbook. Si una cláusula de foro no es la Jurisdiccion_Permitida, o un tope de responsabilidad es inferior a Limite_Responsabilidad_Aceptable, publíquelo como riesgo crítico máximo. severity high.
+- Intención. Si una sección de cierre tiene intención de privacidad internacional, no la sustituya por un foro local. Si contradice el mapa de definiciones, publíquela como ficha propia.
 
 {_ENTERPRISE_LOCK}
 {_CITATION_RULE}
@@ -230,6 +244,9 @@ AISLAMIENTO Y GRANULARIDAD — obligatorios:
 - Detecte, cada una en su ficha, una contradicción entre definiciones iniciales y la cláusula de controversias del cierre, un plazo operativo inferior a cinco días hábiles unido a daños liquidados, una tasa de capitalización o interés compuesto, y una transmisión de título, equipos o participaciones a precio simbólico o nominal bajo fuerza mayor, terminación o liquidación.
 - No invente un porcentaje, un importe, una página ni una sede para completar un campo. Si no está escrito, use "No especificado".
 - El dictamen se serializa en memoria, en un JSON en español jurídico, y el documento no se retiene.
+- No calcule importes ni ejecute operaciones. Extraiga solo base_fee, penalty_percentage y affected_years tal como están escritos. Si una variable no está, escriba "No especificado".
+- Cada ficha separa objeto_afectado, cuantia_impacto_economico y condicion_operativa. cuantia_impacto_economico debe quedar en "No especificado": el cálculo lo hace el programa, no el modelo.
+- La gravedad mira la variable más gravosa de la ficha, no la más fácil de leer.
 """
 
 
@@ -360,6 +377,12 @@ PARTNER_SCHEMA: dict[str, Any] = {
                     "seccion_articulo",
                     "cita_literal_exacta",
                     "contexto_insercion_word",
+                    "objeto_afectado",
+                    "cuantia_impacto_economico",
+                    "condicion_operativa",
+                    "base_fee",
+                    "penalty_percentage",
+                    "affected_years",
                 ],
                 "properties": {
                     "id": {"type": "string"},
@@ -375,6 +398,12 @@ PARTNER_SCHEMA: dict[str, Any] = {
                     "seccion_articulo": {"type": "string"},
                     "cita_literal_exacta": {"type": "string"},
                     "contexto_insercion_word": {"type": "string"},
+                    "objeto_afectado": {"type": "string"},
+                    "cuantia_impacto_economico": {"type": "string"},
+                    "condicion_operativa": {"type": "string"},
+                    "base_fee": {"type": "string"},
+                    "penalty_percentage": {"type": "string"},
+                    "affected_years": {"type": "string"},
                 },
             },
         },
@@ -412,6 +441,12 @@ class RiskFinding(BaseModel):
     seccion_articulo: str = "Cláusula citada"
     cita_literal_exacta: str = ""
     contexto_insercion_word: str = ABSENT
+    objeto_afectado: str = ABSENT
+    cuantia_impacto_economico: str = ABSENT
+    condicion_operativa: str = ABSENT
+    base_fee: str = ABSENT
+    penalty_percentage: str = ABSENT
+    affected_years: str = ABSENT
 
 
 class AuditResult(BaseModel):
@@ -529,7 +564,7 @@ def _complete(
                 request["reasoning_effort"] = "high"
                 request["max_completion_tokens"] = 16000
             else:
-                request["temperature"] = 0
+                request["temperature"] = 0.0
                 request["max_completion_tokens"] = 16384
             response = client.chat.completions.create(**request)
             content = response.choices[0].message.content or ""
@@ -649,23 +684,6 @@ def _control_note(contract_text: str) -> str:
             "El título empieza por \"Bandera roja crítica\" y nombra ese plazo."
         )
         for article, label in _downtime_seizure_articles(contract_text)
-    )
-    playbook = load_playbook()
-    allowed = playbook["Jurisdiccion_Permitida"]
-    limit = acceptable_liability_percent(playbook)
-    sections = _article_sections(contract_text)
-    lines.extend(
-        (
-            f"- Art. {article}: riesgo crítico máximo del playbook. El foro «{phrase}» no es {allowed}."
-        )
-        for article, phrase in jurisdiction_violations(sections, allowed)
-    )
-    lines.extend(
-        (
-            f"- Art. {article}: riesgo crítico máximo del playbook. El tope del {_fmt_percent(percent)}% "
-            f"está por debajo del { _fmt_percent(limit) }% admisible."
-        )
-        for article, percent in liability_violations(sections, limit)
     )
     if not lines:
         return ""
@@ -1738,7 +1756,10 @@ def _ensure_playbook(
     for article, phrase in jurisdiction_violations(section_list, allowed):
         if _playbook_card(risks, article, "jurisdic"):
             continue
-        excerpt = _verbatim(sections.get(article, ""), contract_text)
+        body = sections.get(article, "")
+        if _privacy_intent(body):
+            continue
+        excerpt = _verbatim(body, contract_text)
         if not excerpt:
             continue
         risks.append(
@@ -1908,7 +1929,181 @@ def _drop_unanchored(risks: Any, contract_text: str) -> list[dict[str, Any]]:
     return kept
 
 
-def _publish(payload: dict[str, Any], contract_text: str) -> dict[str, Any]:
+_PRIVACY_INTENT = re.compile(
+    r"gdpr|rgpd|ccpa|datos personales|privacidad|data protection|protección de datos",
+    re.IGNORECASE,
+)
+_COMPOUND_CUE = re.compile(r"capitaliz|compuest|compound|exponenc", re.IGNORECASE)
+_FORUM_CUE = re.compile(
+    r"ley aplicable|foro|jurisdicci[oó]n|governing law|sede arbitral|tribunal",
+    re.IGNORECASE,
+)
+
+
+def _privacy_intent(text: str) -> bool:
+    return bool(_PRIVACY_INTENT.search(text or ""))
+
+
+def _map_note(reference_map: dict[str, Any] | None) -> str:
+    if not reference_map:
+        return ""
+    return (
+        "\n\nMAPA ESTRUCTURAL DEL PASE 1, solo en memoria. "
+        "Cruce las cláusulas finales contra este mapa. No calcule importes. "
+        "Si privacy_lock es true, no imponga un tribunal local sobre esa materia.\n"
+        + json.dumps(reference_map, ensure_ascii=False)
+    )
+
+
+def build_reference_map(contract_text: str) -> dict[str, Any]:
+    """Pass 1: early definitions, entities, and governing framework. Nothing is written to disk."""
+    sections = _article_sections(contract_text)
+    split_at = max(1, len(sections) // 2)
+    early = sections[:split_at]
+    entities: list[str] = []
+    definitions: list[dict[str, str]] = []
+    framework: list[dict[str, str]] = []
+    privacy_lock = _privacy_intent(contract_text[:4000])
+    for article, body in early:
+        compact = " ".join(body.split())
+        snippet = compact[:280]
+        lowered = compact.lower()
+        if any(word in lowered for word in ("parte", "comparec", "between", "acreedor", "deudor")):
+            entities.append(snippet[:180])
+        if any(word in lowered for word in ("definic", "definition", "significa", "means")):
+            definitions.append({"article": article or ABSENT, "text": snippet})
+        if _FORUM_CUE.search(compact):
+            framework.append({"article": article or ABSENT, "text": snippet})
+        if _privacy_intent(compact):
+            privacy_lock = True
+    return {
+        "entities": entities[:6],
+        "definitions": definitions[:8],
+        "governing_framework": framework[:6],
+        "privacy_lock": privacy_lock,
+    }
+
+
+def _extracted_number(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text or text.casefold() == ABSENT.casefold():
+        return None
+    match = re.search(r"\d[\d.,]*", text)
+    if not match:
+        return None
+    return _parse_amount(match.group(0))
+
+
+def calculate_exposure(
+    base_fee: float | None,
+    penalty_percentage: float | None,
+    affected_years: float | None,
+    compound: bool,
+) -> str:
+    """Cold arithmetic. The model is not allowed to supply this result."""
+    if base_fee is None or penalty_percentage is None or affected_years is None:
+        return ABSENT
+    rate = penalty_percentage / 100.0
+    if compound:
+        amount = base_fee * (((1 + rate) ** affected_years) - 1)
+        mode = "compuesto"
+    else:
+        amount = base_fee * rate * affected_years
+        mode = "lineal"
+    return f"{_fmt_usd(amount)} ({mode})"
+
+
+def _apply_extracted_math(risks: Any) -> None:
+    if not isinstance(risks, list):
+        return
+    for risk in risks:
+        if not isinstance(risk, dict):
+            continue
+        excerpt = str(risk.get("cita_literal_exacta") or risk.get("excerpt") or "")
+        base_fee = _extracted_number(risk.get("base_fee"))
+        penalty = _extracted_number(risk.get("penalty_percentage"))
+        years = _extracted_number(risk.get("affected_years"))
+        for key in ("objeto_afectado", "condicion_operativa", "base_fee", "penalty_percentage", "affected_years"):
+            if not str(risk.get(key) or "").strip():
+                risk[key] = ABSENT
+        risk["cuantia_impacto_economico"] = calculate_exposure(
+            base_fee,
+            penalty,
+            years,
+            bool(_COMPOUND_CUE.search(excerpt)),
+        )
+        if risk["cuantia_impacto_economico"] != ABSENT or _short_condition(str(risk.get("condicion_operativa") or "")):
+            risk["severity"] = "high"
+
+
+def _short_condition(text: str) -> bool:
+    match = re.search(r"(\d+)", text)
+    if not match:
+        return False
+    count = int(match.group(1))
+    lowered = text.lower()
+    if "hora" in lowered or "hour" in lowered:
+        return count < 120
+    if "d" in lowered or "day" in lowered or "hábil" in lowered or "habil" in lowered:
+        return count < 5
+    return False
+
+
+def _apply_reference_contradictions(
+    payload: dict[str, Any],
+    contract_text: str,
+    reference_map: dict[str, Any] | None,
+) -> None:
+    """Pass 2: late indemnification and miscellaneous terms against the in-memory map."""
+    if not reference_map:
+        return
+    risks = payload.get("risks")
+    if not isinstance(risks, list):
+        risks = []
+        payload["risks"] = risks
+    early_framework = " ".join(
+        item.get("text", "") for item in reference_map.get("governing_framework", []) if isinstance(item, dict)
+    )
+    if not early_framework.strip():
+        return
+    sections = _article_sections(contract_text)
+    late = sections[max(1, len(sections) // 2) :]
+    for article, body in late:
+        if reference_map.get("privacy_lock") and _privacy_intent(body):
+            continue
+        if not _FORUM_CUE.search(body):
+            continue
+        late_text = " ".join(body.split())
+        if early_framework[:80].casefold() in late_text.casefold():
+            continue
+        excerpt = _verbatim(body, contract_text)
+        if not excerpt:
+            continue
+        already = any(
+            isinstance(risk, dict) and article and article in str(risk.get("article") or "")
+            and "contradic" in f"{risk.get('title', '')} {risk.get('analysis', '')}".lower()
+            for risk in risks
+        )
+        if already:
+            continue
+        risks.append(
+            _backstop_risk(
+                article or "cierre",
+                "Contradicción entre el marco inicial y el cierre",
+                excerpt,
+                "La cláusula final no puede cumplirse junto con el marco de definiciones o de ley aplicable del inicio.",
+                "Unifique la ley aplicable y el foro del cierre con las definiciones iniciales.",
+                "La ley aplicable y el foro del cierre serán los mismos que fijan las definiciones iniciales.",
+                origin="supervisor",
+            )
+        )
+
+
+def _publish(
+    payload: dict[str, Any],
+    contract_text: str,
+    reference_map: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload.pop("reasoning", None)
     if not isinstance(payload.get("metadata"), dict):
         payload["metadata"] = {}
@@ -1921,12 +2116,14 @@ def _publish(payload: dict[str, Any], contract_text: str) -> dict[str, Any]:
     if not isinstance(payload.get("omissions"), list):
         payload["omissions"] = []
     payload["omissions"] = _drop_false_omissions(payload["omissions"], contract_text)
+    _apply_reference_contradictions(payload, contract_text, reference_map)
     _apply_financial_controls(payload, contract_text)
     payload["risks"] = _ground_risks(payload.get("risks"), contract_text)
     _reinforce_matrix(payload, contract_text)
     payload["risks"] = _ground_risks(payload.get("risks"), contract_text)
     _stamp_citations(payload.get("risks"), contract_text)
     payload["risks"] = _drop_unanchored(payload.get("risks"), contract_text)
+    _apply_extracted_math(payload.get("risks"))
     result = AuditResult.model_validate(payload)
     return result.model_dump()
 

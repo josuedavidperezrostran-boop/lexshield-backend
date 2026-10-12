@@ -6,7 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from .auditor import compile_partner_opinion, scan_financial_and_ip, scan_jurisdiction, supervise_matrix
+from .auditor import (
+    build_reference_map,
+    compile_partner_opinion,
+    scan_financial_and_ip,
+    scan_jurisdiction,
+    supervise_matrix,
+)
 from .auth import token_is_valid
 from .billing import router as billing_router
 from .compare import compare_contracts
@@ -131,14 +137,21 @@ def _read_upload(filename: str | None, content_type: str | None, payload: bytes)
 
 
 def _review_with_critic(contract_text: str, filename: str) -> dict:
-    """Auditor and litigator read in parallel. The partner consolidates. The senior partner runs the contradiction matrix."""
+    """Pass 1 stores the opening map in memory. Pass 2 reads the closing clauses against that map."""
+    reference_map = build_reference_map(contract_text)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        auditor = pool.submit(scan_financial_and_ip, contract_text, filename)
-        litigator = pool.submit(scan_jurisdiction, contract_text, filename)
+        auditor = pool.submit(scan_financial_and_ip, contract_text, filename, reference_map)
+        litigator = pool.submit(scan_jurisdiction, contract_text, filename, reference_map)
         auditor_notes = auditor.result()
         litigator_notes = litigator.result()
-    consolidated = compile_partner_opinion(contract_text, filename, auditor_notes, litigator_notes)
-    return supervise_matrix(contract_text, filename, consolidated)
+    consolidated = compile_partner_opinion(
+        contract_text,
+        filename,
+        auditor_notes,
+        litigator_notes,
+        reference_map,
+    )
+    return supervise_matrix(contract_text, filename, consolidated, reference_map)
 
 
 if __name__ == "__main__":
