@@ -10,3 +10,6 @@ __pycache__/
 .idea/
 .vscode/
 *.log
+*.sqlite
+*.sqlite3
+data/

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o"
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    partners_db_path: str = ""
     access_token_secret: str = "change-me-in-production"
     frontend_origin: str = "https://frontend-1-lex-shield2.vercel.app"
     backend_origin: str = "http://localhost:8000"
