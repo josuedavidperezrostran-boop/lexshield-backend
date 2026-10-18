@@ -4,6 +4,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auditor import (
@@ -19,6 +20,7 @@ from .compare import compare_contracts
 from .config import settings
 from .extract import extract_text
 from .webhooks import router as stripe_webhook_router
+from .paddle_webhooks import router as paddle_webhook_router
 
 app = FastAPI(
     title="LexShield",
@@ -29,22 +31,16 @@ app = FastAPI(
     version="1.1.0",
 )
 
-_VERCEL_ORIGIN = "https://vercel.app"
-_VERCEL_ORIGIN_REGEX = r"https://([a-zA-Z0-9-]+\.)*vercel\.app"
-
-
 def _allowed_origins() -> list[str]:
-    origins = [_VERCEL_ORIGIN]
     configured = (settings.frontend_origin or "").strip().rstrip("/")
-    if configured and configured not in origins:
-        origins.append(configured)
-    return origins
+    if not configured:
+        configured = "https://frontend-1-lex-shield2.vercel.app"
+    return [configured]
 
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
-    allow_origin_regex=_VERCEL_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -53,6 +49,7 @@ app.add_middleware(
 app.include_router(billing_router)
 app.include_router(billing_router, prefix="/api")
 app.include_router(stripe_webhook_router)
+app.include_router(paddle_webhook_router)
 
 
 def require_subscription(authorization: str | None = Header(default=None)) -> None:
@@ -85,7 +82,9 @@ async def analyze_contract(
     if len(payload) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="File exceeds the 10 MB in-memory limit.")
 
-    text = extract_text(file.filename or "contract", file.content_type, payload)
+    text = await run_in_threadpool(
+        extract_text, file.filename or "contract", file.content_type, payload
+    )
     del payload
 
     truncated = False
@@ -94,7 +93,7 @@ async def analyze_contract(
         truncated = True
 
     # Single full-context pass per desk. The text is not split into windows.
-    audit = _review_with_critic(text, file.filename or "contract")
+    audit = await run_in_threadpool(_review_with_critic, text, file.filename or "contract")
     return {
         "filename": file.filename,
         "truncated": truncated,
@@ -114,10 +113,14 @@ async def compare_versions(
     payload_b = await version_b.read()
     await version_a.close()
     await version_b.close()
-    text_a = _read_upload(version_a.filename, version_a.content_type, payload_a)
-    text_b = _read_upload(version_b.filename, version_b.content_type, payload_b)
+    text_a = await run_in_threadpool(
+        _read_upload, version_a.filename, version_a.content_type, payload_a
+    )
+    text_b = await run_in_threadpool(
+        _read_upload, version_b.filename, version_b.content_type, payload_b
+    )
     del payload_a, payload_b
-    report = compare_contracts(text_a, text_b)
+    report = await run_in_threadpool(compare_contracts, text_a, text_b)
     return {
         "version_a": version_a.filename,
         "version_b": version_b.filename,
