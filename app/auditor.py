@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from typing import Any, Literal, NamedTuple
 
 from fastapi import HTTPException
@@ -2138,15 +2139,124 @@ def _keeps_desk_scope(risk: dict[str, Any]) -> bool:
     )
 
 
+_ORDINAL_FEMININE = (
+    "primera",
+    "segunda",
+    "tercera",
+    "cuarta",
+    "quinta",
+    "sexta",
+    "septima",
+    "octava",
+    "novena",
+)
+_ORDINAL_MASCULINE = (
+    "primero",
+    "segundo",
+    "tercero",
+    "cuarto",
+    "quinto",
+    "sexto",
+    "septimo",
+    "octavo",
+    "noveno",
+)
+_ORDINAL_APOCOPE = ("primer", "tercer")
+_ORDINAL_HEADING_WORD = (
+    r"art(?:[ií]culo|iculo)|article|art|cl[aá]usula|"
+    r"secci(?:[oó]n|on)|cap(?:[ií]tulo|itulo)|clause|section"
+)
+_ORDINAL_HEADING_LINE = re.compile(
+    rf"^[ \t]*(?:{_ORDINAL_HEADING_WORD})\.?[ \t]+([^\n]*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ARTICLE_ORDINAL_PREFIX = re.compile(
+    rf"^(?:{_ORDINAL_HEADING_WORD})\.?\s+",
+    re.IGNORECASE,
+)
+
+
+def _ordinal_phrases() -> tuple[str, ...]:
+    """Comparison-normalized Spanish ordinals, longest phrase first."""
+    phrases = {
+        *_ORDINAL_FEMININE,
+        *_ORDINAL_MASCULINE,
+        *_ORDINAL_APOCOPE,
+        "decima",
+        "decimo",
+        "undecima",
+        "undecimo",
+        "duodecima",
+        "duodecimo",
+        "vigesima",
+        "vigesimo",
+        "unica",
+        "unico",
+        "decimoctava",
+        "decimoctavo",
+    }
+    for stem, units in (
+        ("decima", _ORDINAL_FEMININE),
+        ("decimo", _ORDINAL_MASCULINE),
+        ("vigesima", _ORDINAL_FEMININE),
+        ("vigesimo", _ORDINAL_MASCULINE),
+    ):
+        for unit in units:
+            phrases.add(f"{stem} {unit}")
+    for unit in (*_ORDINAL_FEMININE, *_ORDINAL_MASCULINE):
+        phrases.add(f"decimo{unit}")
+    for apocope in _ORDINAL_APOCOPE:
+        phrases.add(f"decimo {apocope}")
+        phrases.add(f"vigesimo {apocope}")
+    return tuple(sorted(phrases, key=len, reverse=True))
+
+
+_ORDINAL_PHRASES = _ordinal_phrases()
+
+
+def _fold_ordinal(text: str) -> str:
+    """NFD, drop combining marks, casefold, and collapse whitespace."""
+    decomposed = unicodedata.normalize("NFD", text)
+    without_marks = "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
+    return " ".join(without_marks.casefold().split())
+
+
+def _leading_ordinal(folded: str) -> str:
+    """Vocabulary phrase at the start of normalized text, or empty."""
+    for phrase in _ORDINAL_PHRASES:
+        if folded == phrase:
+            return phrase
+        if folded.startswith(phrase) and not folded[len(phrase)].isalpha():
+            return phrase
+    return ""
+
+
+def _ordinal_phrase(article: str) -> str:
+    """Normalized ordinal in an article label. The heading word is optional."""
+    body = _ARTICLE_ORDINAL_PREFIX.sub("", article.strip(), count=1)
+    return _leading_ordinal(_fold_ordinal(body))
+
+
+def _ordinal_headings(contract_text: str) -> set[str]:
+    """Normalized ordinals that open a heading line. Prose mentions are ignored."""
+    found: set[str] = set()
+    for match in _ORDINAL_HEADING_LINE.finditer(contract_text):
+        phrase = _leading_ordinal(_fold_ordinal(match.group(1)))
+        if phrase:
+            found.add(phrase)
+    return found
+
+
 def _risk_is_grounded(risk: dict[str, Any], contract_text: str) -> bool:
     excerpt = str(risk.get("excerpt") or "")
     article = str(risk.get("article") or "")
     if len(excerpt) < 8 or not _excerpt_in_contract(excerpt, contract_text):
         return False
     numbers = _ARTICLE_NUM.findall(article)
-    if not numbers:
-        return False
-    return all(number in contract_text for number in numbers)
+    if numbers:
+        return all(number in contract_text for number in numbers)
+    phrase = _ordinal_phrase(article)
+    return bool(phrase) and phrase in _ordinal_headings(contract_text)
 
 
 def _excerpt_in_contract(excerpt: str, contract_text: str) -> bool:
