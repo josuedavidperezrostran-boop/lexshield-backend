@@ -177,14 +177,27 @@ class ExcerptFallbackTests(unittest.TestCase):
             for number, body in _pages(contract)
             if _excerpt_in_contract(excerpt, body)
         ]
+        prefix_len = len(excerpt)
+        while prefix_len > 0 and excerpt[:prefix_len] not in contract:
+            prefix_len -= 1
+        quote_start = contract.find(excerpt[:prefix_len]) if prefix_len else -1
+        start_page = None
+        search_from = 0
+        for number, body in _pages(contract):
+            body_at = contract.find(body, search_from)
+            if body_at < 0:
+                continue
+            if quote_start >= 0 and body_at <= quote_start:
+                start_page = number
+            search_from = body_at + 1
         if not grounded or not after_ground:
             stage = "_ground_risks"
             why = "ordinal_or_desk_scope_rejected"
         elif not page_hits:
-            stage = "_drop_unanchored"
+            stage = "cross_page_anchored"
             why = (
-                "quote_not_in_any_page_body "
-                f"citation_page={page} page_hits=[]"
+                "quote_starts_on_page "
+                f"citation_page={page} start_page={start_page} page_hits=[]"
             )
         else:
             stage = "anchored"
@@ -194,13 +207,17 @@ class ExcerptFallbackTests(unittest.TestCase):
         integrity = output["integrity"]
         reasons = integrity["discard_reasons"]
         kept_ids = [item["id"] for item in output["risks"]]
-        kept = "clause-2-span" in kept_ids
+        kept_card = next((item for item in output["risks"] if item["id"] == "clause-2-span"), None)
+        kept = kept_card is not None
+        pagina = kept_card["pagina_exacta"] if kept_card else None
         print(
             "EXCERPT_FALLBACK_G "
             f"kept={kept} "
             f"kept_ids={kept_ids} "
             f"stage={stage} "
             f"why={why} "
+            f"pagina_exacta={pagina} "
+            f"start_page={start_page} "
             f"discard_reasons={reasons} "
             f"status={integrity['status']} "
             f"verified={integrity['verified']} "
@@ -211,17 +228,10 @@ class ExcerptFallbackTests(unittest.TestCase):
             set(reasons),
             {"malformed_item", "failed_verification", "quote_not_anchored"},
         )
-        if stage == "_ground_risks":
-            self.assertFalse(kept)
-            self.assertGreater(reasons["failed_verification"], 0)
-        elif stage == "_drop_unanchored":
-            self.assertFalse(kept)
-            self.assertEqual(reasons["failed_verification"], 0)
-            self.assertGreater(reasons["quote_not_anchored"], 0)
-        else:
-            self.assertTrue(kept)
-            self.assertEqual(reasons["failed_verification"], 0)
-            self.assertEqual(reasons["quote_not_anchored"], 0)
+        self.assertTrue(kept)
+        self.assertEqual(reasons["quote_not_anchored"], 0)
+        self.assertEqual(pagina, start_page)
+        self.assertNotEqual(integrity["status"], "unreliable")
 
     def test_combined_artifact_and_typography(self) -> None:
         contract = (

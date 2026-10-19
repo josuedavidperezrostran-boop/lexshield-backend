@@ -1853,12 +1853,90 @@ def _stamp_citations(risks: Any, contract_text: str) -> None:
         risk["contexto_insercion_word"] = _word_anchor(excerpt[:500], contract_text)
 
 
+def _cross_page_start(quote: str, contract_text: str) -> int | None:
+    """Page where a pagination-cleaned quote starts, if that page is unique."""
+
+    def _replace_pattern(
+        pattern: re.Pattern[str],
+        chars: list[str],
+        offsets: list[int],
+    ) -> tuple[list[str], list[int]]:
+        source = "".join(chars)
+        out_chars: list[str] = []
+        out_offsets: list[int] = []
+        cursor = 0
+        for match in pattern.finditer(source):
+            out_chars.extend(chars[cursor : match.start()])
+            out_offsets.extend(offsets[cursor : match.start()])
+            out_chars.append(" ")
+            out_offsets.append(offsets[match.start()])
+            cursor = match.end()
+        out_chars.extend(chars[cursor:])
+        out_offsets.extend(offsets[cursor:])
+        return out_chars, out_offsets
+
+    chars = list(contract_text)
+    offsets = list(range(len(contract_text)))
+    chars, offsets = _replace_pattern(_EXCERPT_PAGE_FOOTER_RE, chars, offsets)
+    chars, offsets = _replace_pattern(_EXCERPT_PAGE_MARK_RE, chars, offsets)
+    collapsed: list[str] = []
+    collapsed_offsets: list[int] = []
+    pending: int | None = None
+    started = False
+    for char, offset in zip(chars, offsets):
+        if char.isspace():
+            if started and pending is None:
+                pending = offset
+            continue
+        if pending is not None:
+            collapsed.append(" ")
+            collapsed_offsets.append(pending)
+            pending = None
+        collapsed.append(char)
+        collapsed_offsets.append(offset)
+        started = True
+    cleaned_contract = "".join(collapsed)
+    cleaned_quote = " ".join(_excerpt_without_pagination(quote).split())
+    if len(cleaned_quote) < 8:
+        return None
+    markers = list(_PAGE_MARK.finditer(contract_text))
+    found: list[int] = []
+    start = 0
+    while True:
+        index = cleaned_contract.find(cleaned_quote, start)
+        if index < 0:
+            break
+        offset = collapsed_offsets[index]
+        if not markers:
+            page: int | None = 1
+        else:
+            page = None
+            for marker in markers:
+                if marker.start() <= offset:
+                    page = int(marker.group(1))
+                else:
+                    break
+        if page is None:
+            return None
+        found.append(page)
+        start = index + 1
+    if not found or any(item != found[0] for item in found):
+        return None
+    return found[0]
+
+
 def _citation_context(excerpt: str, contract_text: str, article: str) -> tuple[int, str]:
     page = 1
+    found = False
     for number, body in _pages(contract_text):
         if excerpt and _excerpt_in_contract(excerpt, body):
             page = number
+            found = True
             break
+    if not found:
+        cross_page = _cross_page_start(excerpt, contract_text)
+        if cross_page is not None:
+            page = cross_page
     section = article.strip() or "Cláusula citada"
     position = contract_text.find(excerpt) if excerpt else -1
     if position < 0 and excerpt:
@@ -1923,7 +2001,8 @@ def _drop_unanchored(risks: Any, contract_text: str) -> list[dict[str, Any]]:
         page = risk.get("pagina_exacta")
         bodies = [body for number, body in pages if number == page]
         if bodies and not any(_excerpt_in_contract(quote, body) for body in bodies):
-            continue
+            if _cross_page_start(quote, contract_text) != page:
+                continue
         risk["cita_literal_exacta"] = quote
         risk["contexto_insercion_word"] = _word_anchor(quote, contract_text)
         kept.append(risk)
