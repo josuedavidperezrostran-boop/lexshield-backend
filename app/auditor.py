@@ -2455,10 +2455,58 @@ def _risk_is_grounded(risk: dict[str, Any], contract_text: str) -> bool:
     return bool(phrase) and phrase in _ordinal_headings(contract_text)
 
 
+# Comparison-only. Callers keep the original excerpt and contract text.
+_EXCERPT_PAGE_FOOTER_RE = re.compile(r"Página\s+\d+\s+de\s+\d+", re.IGNORECASE)
+_EXCERPT_PAGE_MARK_RE = re.compile(r"\[\[PÁGINA\s+\d+\]\]", re.IGNORECASE)
+_EXCERPT_QUOTE_RE = re.compile("[\u0022\u0027\u201c\u201d\u2018\u2019\u00ab\u00bb]")
+# U+002D is the straight hyphen a quote uses where the extract has an em dash.
+_EXCERPT_DASH_RE = re.compile("[\u002d\u2010\u2011\u2012\u2013\u2014\u2015\u2212]")
+_EXCERPT_ELLIPSIS_RE = re.compile("\u2026|\\.{3}")
+_EXCERPT_SPECIAL_SPACE_RE = re.compile("[\u00a0\u2009\u200a\u202f]")
+_EXCERPT_ZERO_WIDTH_RE = re.compile("[\u200b\ufeff]")
+
+
+def _excerpt_without_pagination(text: str) -> str:
+    """Replace page footers and page marks with a single space."""
+    text = _EXCERPT_PAGE_FOOTER_RE.sub(" ", text)
+    return _EXCERPT_PAGE_MARK_RE.sub(" ", text)
+
+
+def _excerpt_without_typography(text: str) -> str:
+    """Drop or unify quotes, dashes, ellipses, and special spaces. Letters stay."""
+    text = _EXCERPT_ZERO_WIDTH_RE.sub("", text)
+    text = _EXCERPT_SPECIAL_SPACE_RE.sub(" ", text)
+    text = _EXCERPT_QUOTE_RE.sub("", text)
+    text = _EXCERPT_DASH_RE.sub(" ", text)
+    return _EXCERPT_ELLIPSIS_RE.sub(" ", text)
+
+
+def _excerpt_collapsed_in(excerpt: str, contract_text: str) -> bool:
+    """Contiguous substring after whitespace collapse. Empty residue does not match."""
+    collapsed = " ".join(excerpt.split())
+    if not collapsed:
+        return False
+    return collapsed in " ".join(contract_text.split())
+
+
 def _excerpt_in_contract(excerpt: str, contract_text: str) -> bool:
     if excerpt in contract_text:
         return True
-    return " ".join(excerpt.split()) in " ".join(contract_text.split())
+    if " ".join(excerpt.split()) in " ".join(contract_text.split()):
+        return True
+    excerpt_pages = _excerpt_without_pagination(excerpt)
+    contract_pages = _excerpt_without_pagination(contract_text)
+    if _excerpt_collapsed_in(excerpt_pages, contract_pages):
+        return True
+    if _excerpt_collapsed_in(
+        _excerpt_without_typography(excerpt),
+        _excerpt_without_typography(contract_text),
+    ):
+        return True
+    return _excerpt_collapsed_in(
+        _excerpt_without_typography(excerpt_pages),
+        _excerpt_without_typography(contract_pages),
+    )
 
 
 def _drop_false_omissions(omissions: list[Any], contract_text: str) -> list[Any]:
