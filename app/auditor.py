@@ -2106,6 +2106,21 @@ def _publish(
     reference_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload.pop("reasoning", None)
+    # Identity of the model's own risk objects. The list stays referenced for
+    # the rest of this call so a later control card cannot reuse a collected
+    # id. Contract text is not copied.
+    model_risks = payload.get("risks")
+    raw_ids: set[int] = set()
+    malformed_item = 0
+    if isinstance(model_risks, list):
+        total_candidates = len(model_risks)
+        for item in model_risks:
+            if isinstance(item, dict):
+                raw_ids.add(id(item))
+            else:
+                malformed_item += 1
+    else:
+        total_candidates = 0
     if not isinstance(payload.get("metadata"), dict):
         payload["metadata"] = {}
     metadata = payload["metadata"]
@@ -2120,13 +2135,194 @@ def _publish(
     _apply_reference_contradictions(payload, contract_text, reference_map)
     _apply_financial_controls(payload, contract_text)
     payload["risks"] = _ground_risks(payload.get("risks"), contract_text)
+    grounded_once = _integrity_model_ids(payload.get("risks"), raw_ids)
     _reinforce_matrix(payload, contract_text)
     payload["risks"] = _ground_risks(payload.get("risks"), contract_text)
+    grounded_twice = _integrity_model_ids(payload.get("risks"), raw_ids)
     _stamp_citations(payload.get("risks"), contract_text)
     payload["risks"] = _drop_unanchored(payload.get("risks"), contract_text)
+    anchored = _integrity_model_ids(payload.get("risks"), raw_ids)
     _apply_extracted_math(payload.get("risks"))
-    result = AuditResult.model_validate(payload)
-    return result.model_dump()
+    published = AuditResult.model_validate(payload).model_dump()
+    published["integrity"] = _integrity_summary(
+        published,
+        total_candidates=total_candidates,
+        malformed_item=malformed_item,
+        model_risks=model_risks,
+        grounded_once=grounded_once,
+        grounded_twice=grounded_twice,
+        anchored=anchored,
+    )
+    return published
+
+
+_INTEGRITY_VERSION = "integrity-v1"
+_INTEGRITY_STATUS_LABELS = {
+    "complete": "Análisis completo",
+    "incomplete": "Análisis incompleto",
+    "unreliable": "Sin resultados fiables",
+}
+_INTEGRITY_MESSAGES = {
+    "complete": (
+        "Los hallazgos publicados tienen cita textual verificada en el contrato. "
+        "Este informe es apoyo a la decisión y requiere revisión por un abogado."
+    ),
+    "incomplete": (
+        "Algunos hallazgos no pudieron verificarse o el análisis puede ser parcial. "
+        "Revisión humana obligatoria."
+    ),
+    "unreliable": (
+        "No fue posible verificar hallazgos. "
+        "No interprete esto como ausencia de riesgos. Revisión humana obligatoria."
+    ),
+}
+# Closed keyword groups. A group counts once when any of its keywords appears.
+_SUMMARY_KEYWORD_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("propiedad intelectual",),
+    ("dolo",),
+    ("jurisdicción", "tribunal", "foro"),
+    ("interés", "mora"),
+    ("renovación",),
+    ("indemn",),
+    ("confidencial",),
+    ("penalidad", "multa"),
+)
+
+
+def _integrity_model_ids(risks: Any, raw_ids: set[int]) -> set[int]:
+    """Model-risk identities still present in a stage result."""
+    if not isinstance(risks, list):
+        return set()
+    return {id(item) for item in risks if isinstance(item, dict) and id(item) in raw_ids}
+
+
+def _integrity_fold(text: str) -> str:
+    """Case-fold and strip accents so keyword checks ignore spelling variants."""
+    decomposed = unicodedata.normalize("NFD", text)
+    without_marks = "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
+    return " ".join(without_marks.casefold().split())
+
+
+def _summary_categories(text: str) -> set[int]:
+    folded = _integrity_fold(text)
+    found: set[int] = set()
+    for index, group in enumerate(_SUMMARY_KEYWORD_GROUPS):
+        if any(_integrity_fold(keyword) in folded for keyword in group):
+            found.add(index)
+    return found
+
+
+def _summary_is_unsupported(summary: Any, risks: Any) -> bool:
+    """True when the summary names two or more categories no finding covers.
+
+    Heuristic, not a guarantee, and it may produce false warnings.
+    Read-only: it never removes, rewrites, reorders, or suppresses a finding.
+    """
+    # Heuristic, not a guarantee, and it may produce false warnings.
+    try:
+        named = _summary_categories(str(summary or ""))
+        covered: set[int] = set()
+        if isinstance(risks, list):
+            for risk in risks:
+                if not isinstance(risk, dict):
+                    continue
+                covered |= _summary_categories(f"{risk.get('title', '')} {risk.get('analysis', '')}")
+        return len(named - covered) >= 2
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _integrity_timestamp() -> str:
+    """UTC time as ISO 8601 with a Z suffix."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _integrity_summary(
+    published: dict[str, Any],
+    total_candidates: int,
+    malformed_item: int,
+    model_risks: Any,
+    grounded_once: set[int],
+    grounded_twice: set[int],
+    anchored: set[int],
+) -> dict[str, Any]:
+    """Counts and closed codes only. No contract text and no model prose."""
+    risks = published.get("risks")
+    if not isinstance(risks, list):
+        risks = []
+    verified = len(risks)
+    added_by_controls = sum(
+        1
+        for risk in risks
+        if isinstance(risk, dict) and str(risk.get("id") or "").startswith("control-")
+    )
+    failed_verification = 0
+    quote_not_anchored = 0
+    if isinstance(model_risks, list):
+        for item in model_risks:
+            if not isinstance(item, dict):
+                continue
+            identity = id(item)
+            # Missing once grounding has finished: either pass dropped it.
+            if identity not in grounded_once or identity not in grounded_twice:
+                failed_verification += 1
+            elif identity not in anchored:
+                quote_not_anchored += 1
+    discard_reasons = {
+        "malformed_item": malformed_item,
+        "failed_verification": failed_verification,
+        "quote_not_anchored": quote_not_anchored,
+    }
+    discarded = malformed_item + failed_verification + quote_not_anchored
+    flags: list[str] = []
+    if _summary_is_unsupported(published.get("summary"), risks):
+        flags.append("summary_unsupported")
+    notes: list[str] = []
+    metadata = published.get("metadata")
+    contract_date = metadata.get("contract_date") if isinstance(metadata, dict) else None
+    if contract_date == ABSENT:
+        notes.append("contract_date_missing")
+    if verified == 0:
+        status = "unreliable"
+    elif discarded > 0 or flags:
+        status = "incomplete"
+    else:
+        status = "complete"
+    return {
+        "version": _INTEGRITY_VERSION,
+        "status": status,
+        "status_label": _INTEGRITY_STATUS_LABELS[status],
+        "message": _INTEGRITY_MESSAGES[status],
+        "total_candidates": total_candidates,
+        "verified": verified,
+        "discarded": discarded,
+        "added_by_controls": added_by_controls,
+        "discard_reasons": discard_reasons,
+        "flags": flags,
+        "notes": notes,
+        "truncated": False,
+        "generated_at": _integrity_timestamp(),
+    }
+
+
+def apply_truncation_to_integrity(audit: dict[str, Any], truncated: bool) -> None:
+    """Mark a cut-off contract on an existing integrity summary."""
+    if not truncated:
+        return
+    integrity = audit.get("integrity") if isinstance(audit, dict) else None
+    if not isinstance(integrity, dict):
+        return
+    integrity["truncated"] = True
+    flags = integrity.get("flags")
+    if not isinstance(flags, list):
+        flags = []
+        integrity["flags"] = flags
+    if "contract_truncated" not in flags:
+        flags.append("contract_truncated")
+    if integrity.get("status") == "complete":
+        integrity["status"] = "incomplete"
+        integrity["status_label"] = _INTEGRITY_STATUS_LABELS["incomplete"]
+        integrity["message"] = _INTEGRITY_MESSAGES["incomplete"]
 
 
 def _keeps_desk_scope(risk: dict[str, Any]) -> bool:

@@ -8,6 +8,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auditor import (
+    apply_truncation_to_integrity,
     build_reference_map,
     compile_partner_opinion,
     scan_financial_and_ip,
@@ -94,6 +95,7 @@ async def analyze_contract(
 
     # Single full-context pass per desk. The text is not split into windows.
     audit = await run_in_threadpool(_review_with_critic, text, file.filename or "contract")
+    apply_truncation_to_integrity(audit, truncated)
     return {
         "filename": file.filename,
         "truncated": truncated,
