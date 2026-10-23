@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # One gpt-4o pass. Leaves room inside the 128k window for the system prompt and the reply.
     max_contract_chars: int = 320_000
     dev_bypass_billing: bool = False
+    # Seconds a Stripe subscription lookup is reused; capped at 600 in app/subscriptions.py.
+    subscription_cache_seconds: int = 300
+    # Optional comma-separated Stripe ids that also count as LexShield Professional.
+    stripe_authorized_product_ids: str = ""
+    stripe_authorized_price_ids: str = ""
     # "production" turns off every dev shortcut. Render also sets RENDER=true on its hosts.
     environment: str = ""
 
