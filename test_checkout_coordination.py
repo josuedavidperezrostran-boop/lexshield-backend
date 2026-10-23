@@ -122,7 +122,7 @@ def _configure(store_path: str, fake: FakeStripe):  # type: ignore[no-untyped-de
         mock.patch.object(stripe.checkout.Session, "retrieve", side_effect=fake.retrieve),
         mock.patch.object(stripe.checkout.Session, "list", side_effect=fake.list),
         mock.patch.object(stripe.Subscription, "list", return_value=SimpleNamespace(data=[])),
-        mock.patch.object(billing, "ensure_founder_promotion"),
+        mock.patch.object(settings, "stripe_price_id_test", "price_test_lexshield"),
     ]
     for patcher in patchers:
         patcher.start()

@@ -83,7 +83,7 @@ class _StripeCase(unittest.TestCase):
         self.create = self._patch(stripe.checkout.Session, "create", return_value=SimpleNamespace(url="https://checkout.stripe.com/c/pay/cs_test_new"))
         self.open_sessions = self._patch(stripe.checkout.Session, "list", return_value=_list())
         self.customers = self._patch(stripe.Customer, "list", return_value=_list())
-        self._patch(billing, "ensure_founder_promotion")
+        self._patch(settings, "stripe_price_id_test", new="price_test_lexshield")
 
     def _patch(self, target: object, name: str, **kwargs: object) -> mock.Mock:
         patcher = mock.patch.object(target, name, **kwargs)
