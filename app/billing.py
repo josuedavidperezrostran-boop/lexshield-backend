@@ -9,7 +9,7 @@ import stripe
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import sessions, subscriptions
+from . import availability, sessions, subscriptions
 from .auth import (
     TokenInfo,
     bearer_token,
@@ -169,6 +169,9 @@ def billing_status() -> dict[str, object]:
         # Tells the frontend that /billing/me and /billing/refresh exist, so a 404 there is a
         # deployment fault rather than an older backend.
         "access_model": ACCESS_MODEL,
+        # Real availability, so the frontend never offers a flow that would fail or pretend.
+        "recovery_available": availability.email_flows_available(),
+        "new_checkout_available": availability.email_checkout_available(),
     }
 
 
@@ -177,17 +180,19 @@ def billing_me(authorization: str | None = Header(default=None)) -> dict[str, ob
     return state_for_authorization(authorization).as_dict()
 
 
-def _acquire_checkout_lock(customer_id: str) -> str:
-    """Shared-store lock per customer, so every process and instance takes turns.
+def acquire_lock(key: str) -> str:
+    """Shared-store lock, so every process and instance takes turns. Returns the owner token.
 
     Waits up to CHECKOUT_LOCK_WAIT_SECONDS for another request to finish (it usually leaves a
     pending session this one then reuses). A holder that dies frees the lock after
-    CHECKOUT_LOCK_SECONDS. Raises StoreUnavailable when the store cannot be used.
+    CHECKOUT_LOCK_SECONDS; a holder that is merely slow can outlive it, which is why the
+    idempotency key, not the lock, is what prevents a second session. Raises StoreUnavailable
+    when the store cannot be used.
     """
     owner = secrets.token_hex(16)
     deadline = time.monotonic() + CHECKOUT_LOCK_WAIT_SECONDS
     while True:
-        if get_store().add(f"checkout:lock:{customer_id}", owner, CHECKOUT_LOCK_SECONDS):
+        if get_store().add(key, owner, CHECKOUT_LOCK_SECONDS):
             return owner
         if time.monotonic() >= deadline:
             raise HTTPException(
@@ -195,6 +200,13 @@ def _acquire_checkout_lock(customer_id: str) -> str:
                 detail="Another checkout for this account is in progress. Try again in a moment.",
             )
         time.sleep(0.1)
+
+
+def release_lock(key: str, owner: str) -> None:
+    try:
+        get_store().delete_if(key, owner)
+    except StoreUnavailable:
+        pass  # the lock expires on its own after CHECKOUT_LOCK_SECONDS
 
 
 def _pending_checkout_url(customer_id: str) -> str | None:
@@ -227,6 +239,10 @@ def _checkout_attempt(customer_id: str) -> tuple[str, int]:
     """
     store = get_store()
     key = f"checkout:attempt:{customer_id}"
+    existing = store.get(key)
+    if existing and int(existing.split(":", 1)[1]) <= time.time():
+        # That attempt's session has expired; replaying its key would return the dead session.
+        store.delete_if(key, existing)
     fresh = f"{secrets.token_hex(16)}:{int(time.time()) + CHECKOUT_SESSION_SECONDS}"
     store.add(key, fresh, CHECKOUT_SESSION_SECONDS + 300)
     attempt_id, expires_at = (store.get(key) or fresh).split(":", 1)
@@ -252,25 +268,35 @@ def _idempotency_key(customer_id: str, attempt_id: str) -> str:
 
 @router.post("/checkout", response_model=CheckoutResponse)
 def create_checkout_session(authorization: str | None = Header(default=None)) -> CheckoutResponse:
-    """Start a subscription without ever selling a second one to a known customer.
+    """Checkout for a customer identified by a token this backend signed.
 
-    The customer comes only from a token this backend signed (current or renewal stage), never
-    from ids or emails sent by the browser. For a known customer, under a shared-store lock:
-    409 when a subscription to use or fix exists; otherwise the pending session (ours or any open
-    LexShield session in Stripe) is returned; otherwise one is created under an idempotency key
-    tied to the checkout attempt. Guarantee, with a shared store reachable by every process: at
-    most one open LexShield Checkout session per known customer at a time, across processes,
-    instances and restarts, and none while a subscription is open. Without a token the visitor
-    is anonymous and Stripe collects the email; that path has no such guarantee.
+    The customer comes only from that token (current or renewal stage), never from ids or emails
+    sent by the browser. Visitors without a token get 401 and must verify their email first
+    (POST /billing/checkout/start, app/signup.py), so every Checkout belongs to a known customer.
     """
     _require_stripe()
     _require_price()
     signed_in = renewable_session(authorization)
     if signed_in is None:
-        return _create_session({})
-    customer_id = signed_in.customer_id
+        raise HTTPException(
+            status_code=401,
+            detail="Verify your email before checkout: POST /billing/checkout/start.",
+        )
+    return CheckoutResponse(checkout_url=checkout_for_customer(signed_in.customer_id))
+
+
+def checkout_for_customer(customer_id: str) -> str:
+    """Checkout URL for a known customer, never a second subscription.
+
+    Under a shared-store lock: 409 when a subscription to use or fix exists; otherwise the
+    pending session (ours, or any open LexShield session in Stripe) is returned; otherwise one
+    is created under an idempotency key tied to the checkout attempt (see _checkout_attempt).
+    """
+    _require_stripe()
+    _require_price()
+    lock_key = f"checkout:lock:{customer_id}"
     try:
-        owner = _acquire_checkout_lock(customer_id)
+        owner = acquire_lock(lock_key)
     except StoreUnavailable:
         raise HTTPException(status_code=503, detail="Checkout is unavailable right now. Try again shortly.") from None
     try:
@@ -281,7 +307,7 @@ def create_checkout_session(authorization: str | None = Header(default=None)) ->
             )
         url = _pending_checkout_url(customer_id) or _open_checkout_url(customer_id)
         if url:
-            return CheckoutResponse(checkout_url=url)
+            return url
         attempt_id, expires_at = _checkout_attempt(customer_id)
         response = _create_session(
             {
@@ -291,14 +317,11 @@ def create_checkout_session(authorization: str | None = Header(default=None)) ->
             }
         )
         get_store().set(f"checkout:session:{customer_id}", response.session_id, CHECKOUT_SESSION_SECONDS + 300)
-        return CheckoutResponse(checkout_url=response.checkout_url)
+        return response.checkout_url
     except StoreUnavailable:
         raise HTTPException(status_code=503, detail="Checkout is unavailable right now. Try again shortly.") from None
     finally:
-        try:
-            get_store().delete_if(f"checkout:lock:{customer_id}", owner)
-        except StoreUnavailable:
-            pass  # the lock expires on its own after CHECKOUT_LOCK_SECONDS
+        release_lock(lock_key, owner)
 
 
 class _CreatedSession(CheckoutResponse):

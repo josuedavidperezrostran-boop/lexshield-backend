@@ -27,11 +27,11 @@ import stripe
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
-from . import subscriptions
-from .auth import issue_access_token, tokens_available
-from .billing import AccessResponse, app_base, stripe_is_configured
+from . import availability, subscriptions
+from .auth import issue_access_token
+from .billing import AccessResponse, app_base
 from .config import settings
-from .mail import MailUnavailable, Message, get_mailer
+from .mail import Message, get_mailer
 from .store import StoreUnavailable, get_store
 
 logger = logging.getLogger("lexshield.recovery")
@@ -62,6 +62,13 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def valid_email(raw: str) -> str:
+    email = raw.strip()
+    if not _EMAIL.fullmatch(email.lower()) or len(email) > 254:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    return email
+
+
 def _client_ip(request: Request) -> str:
     if settings.trust_forwarded_for:
         forwarded = request.headers.get("x-forwarded-for", "")
@@ -79,16 +86,12 @@ def _over_limit(key: str, limit: int) -> bool:
 
 
 def _require_backends() -> None:
-    try:
-        get_store()
-        get_mailer()
-    except (StoreUnavailable, MailUnavailable):
-        raise HTTPException(status_code=503, detail="Account recovery is unavailable right now.") from None
-    if not stripe_is_configured() or not tokens_available():
+    if not availability.email_flows_available():
         raise HTTPException(status_code=503, detail="Account recovery is unavailable right now.")
 
 
-def _customer_with_subscription(email: str) -> str | None:
+def customers_for_email(email: str) -> list[str]:
+    """Stripe customers whose email matches (as typed and lower-cased). Raises on Stripe errors."""
     stripe.api_key = settings.stripe_secret_key
     candidates: list[str] = []
     for query in dict.fromkeys([email, email.lower()]):
@@ -97,8 +100,12 @@ def _customer_with_subscription(email: str) -> str | None:
             cid = customer["id"] if isinstance(customer, dict) else customer.id
             if cid not in candidates:
                 candidates.append(cid)
+    return candidates
+
+
+def customer_with_subscription(email: str) -> str | None:
     best: str | None = None
-    for cid in candidates:
+    for cid in customers_for_email(email):
         state = subscriptions.access_state(cid, fresh=True)
         if state.access:
             return cid
@@ -107,30 +114,39 @@ def _customer_with_subscription(email: str) -> str | None:
     return best
 
 
+def email_tag(email: str) -> str:
+    """Short hash for logs; addresses are never logged."""
+    return _digest(email.lower())[:12]
+
+
+def send_sign_in_link(email: str, customer_id: str) -> None:
+    """Store a one-time code for customer_id and mail its link. Raises on store or mail errors."""
+    code = secrets.token_urlsafe(32)
+    if not get_store().add(f"recover:code:{_digest(code)}", customer_id, CODE_TTL_SECONDS):
+        raise StoreUnavailable("code collision")
+    link = f"{app_base()}/recover#code={code}"
+    get_mailer().send(
+        Message(
+            to=email,
+            subject="Su enlace de acceso a LexShield",
+            text=(
+                "Use este enlace para volver a entrar en LexShield. Caduca en 15 minutos y "
+                f"solo funciona una vez:\n\n{link}\n\n"
+                "Si no lo pidió, ignore este mensaje: nadie puede entrar sin él."
+            ),
+        )
+    )
+
+
 def send_recovery_email(email: str) -> None:
     """Background task. Failures are logged without the address and never reach the caller."""
-    tag = _digest(email.lower())[:12]
+    tag = email_tag(email)
     try:
-        customer_id = _customer_with_subscription(email)
+        customer_id = customer_with_subscription(email)
         if customer_id is None:
             logger.info("recovery.no_subscription email=%s", tag)
             return
-        code = secrets.token_urlsafe(32)
-        if not get_store().add(f"recover:code:{_digest(code)}", customer_id, CODE_TTL_SECONDS):
-            logger.error("recovery.code_collision email=%s", tag)
-            return
-        link = f"{app_base()}/recover#code={code}"
-        get_mailer().send(
-            Message(
-                to=email,
-                subject="Su enlace de acceso a LexShield",
-                text=(
-                    "Use este enlace para volver a entrar en LexShield. Caduca en 15 minutos y "
-                    f"solo funciona una vez:\n\n{link}\n\n"
-                    "Si no lo pidió, ignore este mensaje: nadie puede entrar sin él."
-                ),
-            )
-        )
+        send_sign_in_link(email, customer_id)
         logger.info("recovery.sent email=%s customer=%s", tag, customer_id)
     except Exception as exc:  # noqa: BLE001
         logger.error("recovery.failed email=%s error=%s", tag, type(exc).__name__)
@@ -138,9 +154,7 @@ def send_recovery_email(email: str) -> None:
 
 @router.post("", status_code=202)
 def request_recovery(body: RecoverRequest, request: Request, background_tasks: BackgroundTasks) -> dict[str, str]:
-    email = body.email.strip()
-    if not _EMAIL.fullmatch(email.lower()) or len(email) > 254:
-        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    email = valid_email(body.email)
     _require_backends()
     if _over_limit(f"recover:ip:{_digest(_client_ip(request))}", RECOVER_PER_IP_PER_HOUR):
         raise HTTPException(status_code=429, detail="Too many requests. Try again later.")
