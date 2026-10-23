@@ -45,6 +45,7 @@ class AccessResponse(BaseModel):
     subscription: dict[str, object] | None = None
 
 
+ACCESS_MODEL = "stripe-subscription-v1"
 FOUNDER_COUPON_ID = "founder80_first_month"
 FOUNDER_PROMO_CODE = "FOUNDER80"
 DEFAULT_APP = "https://frontend-1-lex-shield2.vercel.app"
@@ -148,6 +149,9 @@ def billing_status() -> dict[str, object]:
         "interval": "month",
         "checkout_required": not settings.billing_bypass_enabled(),
         "stripe_configured": stripe_is_configured(),
+        # Tells the frontend that /billing/me and /billing/refresh exist, so a 404 there is a
+        # deployment fault rather than an older backend.
+        "access_model": ACCESS_MODEL,
     }
 
 

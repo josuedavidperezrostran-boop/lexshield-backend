@@ -167,6 +167,9 @@ class AccessRuleTests(_StripeCase):
         )
         self.assertEqual(response.status_code, 402)
 
+    def test_status_advertises_access_model(self) -> None:
+        self.assertEqual(self.client.get("/billing/status").json()["access_model"], "stripe-subscription-v1")
+
     def test_me_reports_state(self) -> None:
         self.subs(_sub("past_due"))
         body = self.client.get("/billing/me", headers=_auth(_token())).json()
