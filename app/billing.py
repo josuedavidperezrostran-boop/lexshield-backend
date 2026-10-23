@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import threading
+import secrets
 import time
 from typing import Any
 
@@ -20,15 +20,18 @@ from .auth import (
     tokens_available,
 )
 from .config import settings
-from .store import StoreUnavailable
+from .store import StoreUnavailable, get_store
 from .subscriptions import PRODUCT_KEY, AccessState, SubscriptionLookupError
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 # A Checkout session_id signs a customer in once, right after paying. It is not a lasting login.
 VERIFY_SESSION_MAX_AGE_SECONDS = 24 * 60 * 60
-# Repeated or simultaneous checkout requests for one customer inside this window reuse one session.
-CHECKOUT_IDEMPOTENCY_WINDOW_SECONDS = 10 * 60
+# Checkout coordination for a known customer (shared store, see create_checkout_session).
+CHECKOUT_LOCK_SECONDS = 30
+CHECKOUT_LOCK_WAIT_SECONDS = 5
+# Lifetime of a Checkout session we create; Stripe accepts 30 minutes to 24 hours.
+CHECKOUT_SESSION_SECONDS = 60 * 60
 
 
 class CheckoutResponse(BaseModel):
@@ -191,13 +194,60 @@ def billing_me(authorization: str | None = Header(default=None)) -> dict[str, ob
     return state_for_authorization(authorization).as_dict()
 
 
-_customer_locks: dict[str, threading.Lock] = {}
-_customer_locks_guard = threading.Lock()
+def _acquire_checkout_lock(customer_id: str) -> str:
+    """Shared-store lock per customer, so every process and instance takes turns.
+
+    Waits up to CHECKOUT_LOCK_WAIT_SECONDS for another request to finish (it usually leaves a
+    pending session this one then reuses). A holder that dies frees the lock after
+    CHECKOUT_LOCK_SECONDS. Raises StoreUnavailable when the store cannot be used.
+    """
+    owner = secrets.token_hex(16)
+    deadline = time.monotonic() + CHECKOUT_LOCK_WAIT_SECONDS
+    while True:
+        if get_store().add(f"checkout:lock:{customer_id}", owner, CHECKOUT_LOCK_SECONDS):
+            return owner
+        if time.monotonic() >= deadline:
+            raise HTTPException(
+                status_code=503,
+                detail="Another checkout for this account is in progress. Try again in a moment.",
+            )
+        time.sleep(0.1)
 
 
-def _customer_lock(customer_id: str) -> threading.Lock:
-    with _customer_locks_guard:
-        return _customer_locks.setdefault(customer_id, threading.Lock())
+def _pending_checkout_url(customer_id: str) -> str | None:
+    """The session this account was last sent to, while Stripe still has it open."""
+    store = get_store()
+    session_id = store.get(f"checkout:session:{customer_id}")
+    if not session_id:
+        return None
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail="Could not confirm the pending checkout with Stripe. Try again shortly.",
+        ) from None
+    if _get(session, "status") == "open" and isinstance(_get(session, "url"), str):
+        return _get(session, "url")
+    # Expired or finished: the next session is a new attempt.
+    store.delete(f"checkout:session:{customer_id}")
+    store.delete(f"checkout:attempt:{customer_id}")
+    return None
+
+
+def _checkout_attempt(customer_id: str) -> tuple[str, int]:
+    """Attempt id and expiry shared by every retry of one checkout.
+
+    The idempotency key derives from the attempt, not from the clock, so a retry after a crash
+    (Stripe created the session, the store never heard of it) gets the same session back. The
+    expiry is stored with it because Stripe rejects a reused key with different parameters.
+    """
+    store = get_store()
+    key = f"checkout:attempt:{customer_id}"
+    fresh = f"{secrets.token_hex(16)}:{int(time.time()) + CHECKOUT_SESSION_SECONDS}"
+    store.add(key, fresh, CHECKOUT_SESSION_SECONDS + 300)
+    attempt_id, expires_at = (store.get(key) or fresh).split(":", 1)
+    return attempt_id, int(expires_at)
 
 
 def _open_checkout_url(customer_id: str) -> str | None:
@@ -213,9 +263,8 @@ def _open_checkout_url(customer_id: str) -> str | None:
     return None
 
 
-def _idempotency_key(customer_id: str) -> str:
-    bucket = int(time.time() // CHECKOUT_IDEMPOTENCY_WINDOW_SECONDS)
-    return hashlib.sha256(f"lexshield-checkout:{customer_id}:{bucket}".encode()).hexdigest()
+def _idempotency_key(customer_id: str, attempt_id: str) -> str:
+    return hashlib.sha256(f"lexshield-checkout:{customer_id}:{attempt_id}".encode()).hexdigest()
 
 
 @router.post("/checkout", response_model=CheckoutResponse)
@@ -223,74 +272,97 @@ def create_checkout_session(authorization: str | None = Header(default=None)) ->
     """Start a subscription without ever selling a second one to a known customer.
 
     The customer comes only from a token this backend signed (current or renewal stage), never
-    from ids or emails sent by the browser. A known customer with a subscription to use or fix
-    gets 409 and is sent to the portal; an open LexShield Checkout session is reused; otherwise
-    the session is created for that same Stripe customer under an idempotency key, and a
-    per-process lock serializes simultaneous requests. Without a token the visitor is anonymous
-    and Stripe collects the email; looking that email up here would reveal who subscribes.
+    from ids or emails sent by the browser. For a known customer, under a shared-store lock:
+    409 when a subscription to use or fix exists; otherwise the pending session (ours or any open
+    LexShield session in Stripe) is returned; otherwise one is created under an idempotency key
+    tied to the checkout attempt. Guarantee, with a shared store reachable by every process: at
+    most one open LexShield Checkout session per known customer at a time, across processes,
+    instances and restarts, and none while a subscription is open. Without a token the visitor
+    is anonymous and Stripe collects the email; that path has no such guarantee.
     """
     _require_stripe()
     signed_in = renewable_session(authorization)
-    customer_id = signed_in.customer_id if signed_in else None
-
-    lock = _customer_lock(customer_id) if customer_id else threading.Lock()
-    with lock:
-        if customer_id:
-            if _lookup(customer_id, fresh=True).has_open_subscription:
-                raise HTTPException(
-                    status_code=409,
-                    detail="This account already has a subscription. Manage it in the customer portal.",
-                )
-            open_url = _open_checkout_url(customer_id)
-            if open_url:
-                return CheckoutResponse(checkout_url=open_url)
-            identity_params: dict[str, str] = {
-                "customer": customer_id,
-                "idempotency_key": _idempotency_key(customer_id),
-            }
-        else:
-            identity_params = {}
-        try:
-            ensure_founder_promotion()
-            session = stripe.checkout.Session.create(
-                mode="subscription",
-                success_url=(
-                    f"{app_base()}/success?session_id={{CHECKOUT_SESSION_ID}}"
-                ),
-                cancel_url=f"{app_base()}/#pricing",
-                billing_address_collection="required",
-                allow_promotion_codes=True,
-                line_items=[
-                    {
-                        "quantity": 1,
-                        "price_data": {
-                            "currency": "usd",
-                            "unit_amount": settings.subscription_amount_cents,  # 10000 = $100 USD / month
-                            "recurring": {"interval": "month"},
-                            "product_data": {
-                                "name": "LexShield Professional",
-                                "description": (
-                                    "Unlimited contract risk audits. Processed in memory and purged "
-                                    "after the audit. Text is sent to an external AI provider "
-                                    "(OpenAI) for analysis."
-                                ),
-                                "metadata": {"product": PRODUCT_KEY},
-                            },
-                        },
-                    }
-                ],
-                metadata={"product": PRODUCT_KEY},
-                subscription_data={"metadata": {"product": PRODUCT_KEY}},
-                **identity_params,
+    if signed_in is None:
+        return _create_session({})
+    customer_id = signed_in.customer_id
+    try:
+        owner = _acquire_checkout_lock(customer_id)
+    except StoreUnavailable:
+        raise HTTPException(status_code=503, detail="Checkout is unavailable right now. Try again shortly.") from None
+    try:
+        if _lookup(customer_id, fresh=True).has_open_subscription:
+            raise HTTPException(
+                status_code=409,
+                detail="This account already has a subscription. Manage it in the customer portal.",
             )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=502, detail="Unable to start Stripe Checkout.") from exc
+        url = _pending_checkout_url(customer_id) or _open_checkout_url(customer_id)
+        if url:
+            return CheckoutResponse(checkout_url=url)
+        attempt_id, expires_at = _checkout_attempt(customer_id)
+        response = _create_session(
+            {
+                "customer": customer_id,
+                "expires_at": expires_at,
+                "idempotency_key": _idempotency_key(customer_id, attempt_id),
+            }
+        )
+        get_store().set(f"checkout:session:{customer_id}", response.session_id, CHECKOUT_SESSION_SECONDS + 300)
+        return CheckoutResponse(checkout_url=response.checkout_url)
+    except StoreUnavailable:
+        raise HTTPException(status_code=503, detail="Checkout is unavailable right now. Try again shortly.") from None
+    finally:
+        try:
+            get_store().delete_if(f"checkout:lock:{customer_id}", owner)
+        except StoreUnavailable:
+            pass  # the lock expires on its own after CHECKOUT_LOCK_SECONDS
+
+
+class _CreatedSession(CheckoutResponse):
+    session_id: str
+
+
+def _create_session(identity_params: dict[str, object]) -> _CreatedSession:
+    try:
+        ensure_founder_promotion()
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            success_url=(
+                f"{app_base()}/success?session_id={{CHECKOUT_SESSION_ID}}"
+            ),
+            cancel_url=f"{app_base()}/#pricing",
+            billing_address_collection="required",
+            allow_promotion_codes=True,
+            line_items=[
+                {
+                    "quantity": 1,
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": settings.subscription_amount_cents,  # 10000 = $100 USD / month
+                        "recurring": {"interval": "month"},
+                        "product_data": {
+                            "name": "LexShield Professional",
+                            "description": (
+                                "Unlimited contract risk audits. Processed in memory and purged "
+                                "after the audit. Text is sent to an external AI provider "
+                                "(OpenAI) for analysis."
+                            ),
+                            "metadata": {"product": PRODUCT_KEY},
+                        },
+                    },
+                }
+            ],
+            metadata={"product": PRODUCT_KEY},
+            subscription_data={"metadata": {"product": PRODUCT_KEY}},
+            **identity_params,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail="Unable to start Stripe Checkout.") from exc
 
     if not session.url:
         raise HTTPException(status_code=502, detail="Stripe did not return a checkout URL.")
-    return CheckoutResponse(checkout_url=session.url)
+    return _CreatedSession(checkout_url=session.url, session_id=_get(session, "id") or "")
 
 
 @router.post("/verify", response_model=AccessResponse)
