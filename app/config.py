@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     mail_backend: str = ""
     # Use the first X-Forwarded-For address for rate limits. Only behind a proxy that sets it.
     trust_forwarded_for: bool = False
+    # Stripe sandbox and production are configured apart. STRIPE_MODE ("test" or "live") must
+    # match the key; live keys only work in production, and production must name its mode.
+    stripe_mode: str = ""
+    stripe_price_id_test: str = ""
+    stripe_price_id_live: str = ""
+    stripe_portal_configuration_id_test: str = ""
+    stripe_portal_configuration_id_live: str = ""
     # Optional comma-separated Stripe ids that also count as LexShield Professional.
     stripe_authorized_product_ids: str = ""
     stripe_authorized_price_ids: str = ""
@@ -59,6 +66,34 @@ class Settings(BaseSettings):
     def billing_bypass_enabled(self) -> bool:
         """The demo bypass only works off production, whatever DEV_BYPASS_BILLING says."""
         return self.dev_bypass_billing and not self.is_production()
+
+    def active_stripe_mode(self) -> str | None:
+        """ "test" or "live" when the key, STRIPE_MODE and the environment agree, else None."""
+        key = self.stripe_secret_key.strip()
+        if "your_stripe" in key:
+            return None
+        mode = "test" if key.startswith("sk_test_") else "live" if key.startswith("sk_live_") else None
+        declared = self.stripe_mode.strip().lower()
+        if mode is None or (declared and declared != mode):
+            return None
+        if self.is_production() and not declared:
+            return None
+        if mode == "live" and not self.is_production():
+            return None
+        return mode
+
+    def stripe_price_id(self) -> str | None:
+        mode = self.active_stripe_mode()
+        value = {"test": self.stripe_price_id_test, "live": self.stripe_price_id_live}.get(mode or "", "")
+        return value.strip() or None
+
+    def stripe_portal_configuration_id(self) -> str | None:
+        mode = self.active_stripe_mode()
+        value = {
+            "test": self.stripe_portal_configuration_id_test,
+            "live": self.stripe_portal_configuration_id_live,
+        }.get(mode or "", "")
+        return value.strip() or None
 
     def token_secret_is_safe(self) -> bool:
         secret = self.access_token_secret.strip()

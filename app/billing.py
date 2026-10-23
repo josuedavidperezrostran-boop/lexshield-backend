@@ -51,7 +51,7 @@ class AccessResponse(BaseModel):
 
 
 ACCESS_MODEL = "stripe-subscription-v1"
-FOUNDER_COUPON_ID = "founder80_first_month"
+# Created by hand in each Stripe mode (80% off the first invoice only); Checkout accepts it.
 FOUNDER_PROMO_CODE = "FOUNDER80"
 DEFAULT_APP = "https://frontend-1-lex-shield2.vercel.app"
 
@@ -62,44 +62,27 @@ def app_base() -> str:
     return configured or DEFAULT_APP
 
 
-def ensure_founder_promotion() -> None:
-    """80% off the first invoice only. Month two bills the full $100."""
-    try:
-        coupon = stripe.Coupon.retrieve(FOUNDER_COUPON_ID)
-    except stripe.InvalidRequestError:
-        coupon = stripe.Coupon.create(
-            id=FOUNDER_COUPON_ID,
-            percent_off=80,
-            duration="once",
-            name="Founder launch — first month",
-        )
-    if coupon.percent_off != 80 or coupon.duration != "once":
-        raise HTTPException(
-            status_code=502,
-            detail="FOUNDER80 coupon exists with the wrong duration. Use 80% once.",
-        )
-
-    existing = stripe.PromotionCode.list(code=FOUNDER_PROMO_CODE, active=True, limit=1)
-    if existing.data:
-        return
-    stripe.PromotionCode.create(
-        code=FOUNDER_PROMO_CODE,
-        promotion={"type": "coupon", "coupon": FOUNDER_COUPON_ID},
-    )
-
-
 def stripe_is_configured() -> bool:
-    key = settings.stripe_secret_key.strip()
-    return key.startswith(("sk_test_", "sk_live_")) and "your_stripe" not in key
+    return settings.active_stripe_mode() is not None
 
 
 def _require_stripe() -> None:
     if not stripe_is_configured():
         raise HTTPException(
             status_code=503,
-            detail="STRIPE_SECRET_KEY is not configured. Add test keys to the repo-root .env.",
+            detail="Stripe is not configured for this environment (key, STRIPE_MODE and ENVIRONMENT must agree).",
         )
     stripe.api_key = settings.stripe_secret_key
+
+
+def _require_price() -> str:
+    price_id = settings.stripe_price_id()
+    if not price_id:
+        raise HTTPException(
+            status_code=503,
+            detail="No LexShield price is configured for this Stripe mode (STRIPE_PRICE_ID_TEST / _LIVE).",
+        )
+    return price_id
 
 
 def _require_tokens() -> None:
@@ -281,6 +264,7 @@ def create_checkout_session(authorization: str | None = Header(default=None)) ->
     is anonymous and Stripe collects the email; that path has no such guarantee.
     """
     _require_stripe()
+    _require_price()
     signed_in = renewable_session(authorization)
     if signed_in is None:
         return _create_session({})
@@ -322,8 +306,10 @@ class _CreatedSession(CheckoutResponse):
 
 
 def _create_session(identity_params: dict[str, object]) -> _CreatedSession:
+    # The price (and its product, name and description) is configured in Stripe beforehand;
+    # Checkout never creates products, prices or coupons.
+    price_id = _require_price()
     try:
-        ensure_founder_promotion()
         session = stripe.checkout.Session.create(
             mode="subscription",
             success_url=(
@@ -332,25 +318,7 @@ def _create_session(identity_params: dict[str, object]) -> _CreatedSession:
             cancel_url=f"{app_base()}/#pricing",
             billing_address_collection="required",
             allow_promotion_codes=True,
-            line_items=[
-                {
-                    "quantity": 1,
-                    "price_data": {
-                        "currency": "usd",
-                        "unit_amount": settings.subscription_amount_cents,  # 10000 = $100 USD / month
-                        "recurring": {"interval": "month"},
-                        "product_data": {
-                            "name": "LexShield Professional",
-                            "description": (
-                                "Unlimited contract risk audits. Processed in memory and purged "
-                                "after the audit. Text is sent to an external AI provider "
-                                "(OpenAI) for analysis."
-                            ),
-                            "metadata": {"product": PRODUCT_KEY},
-                        },
-                    },
-                }
-            ],
+            line_items=[{"price": price_id, "quantity": 1}],
             metadata={"product": PRODUCT_KEY},
             subscription_data={"metadata": {"product": PRODUCT_KEY}},
             **identity_params,
@@ -473,38 +441,18 @@ class PortalResponse(BaseModel):
     portal_url: str
 
 
-def ensure_portal_configuration() -> str:
-    listed = stripe.billing_portal.Configuration.list(active=True, limit=20)
-    for config in listed.data:
-        if (config.metadata or {}).get("product") == "lexshield-professional":
-            return config.id
-    created = stripe.billing_portal.Configuration.create(
-        metadata={"product": "lexshield-professional"},
-        business_profile={"headline": "LexShield Professional"},
-        features={
-            "invoice_history": {"enabled": True},
-            "payment_method_update": {"enabled": True},
-            "subscription_cancel": {
-                "enabled": True,
-                "mode": "at_period_end",
-                "proration_behavior": "none",
-            },
-        },
-    )
-    return created.id
-
-
 @router.post("/portal", response_model=PortalResponse)
 def create_portal_session(authorization: str | None = Header(default=None)) -> PortalResponse:
+    """Uses the portal configuration named for this Stripe mode, or the account default."""
     _require_stripe()
     customer_id = current_session(authorization).customer_id
+    configuration = settings.stripe_portal_configuration_id()
 
     try:
-        configuration = ensure_portal_configuration()
         portal = stripe.billing_portal.Session.create(
             customer=customer_id,
             return_url=f"{app_base()}/auditor",
-            configuration=configuration,
+            **({"configuration": configuration} if configuration else {}),
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
