@@ -54,7 +54,7 @@ app.include_router(paddle_webhook_router)
 
 
 def require_subscription(authorization: str | None = Header(default=None)) -> None:
-    if settings.dev_bypass_billing:
+    if settings.billing_bypass_enabled():
         return
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token_is_valid(token):
