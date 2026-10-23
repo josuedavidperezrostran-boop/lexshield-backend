@@ -20,6 +20,7 @@ from .billing import state_for_authorization
 from .compare import compare_contracts
 from .config import settings
 from .extract import extract_text
+from .recovery import router as recovery_router
 from .webhooks import router as stripe_webhook_router
 from .paddle_webhooks import router as paddle_webhook_router
 
@@ -49,6 +50,8 @@ app.add_middleware(
 
 app.include_router(billing_router)
 app.include_router(billing_router, prefix="/api")
+app.include_router(recovery_router)
+app.include_router(recovery_router, prefix="/api")
 app.include_router(stripe_webhook_router)
 app.include_router(paddle_webhook_router)
 
