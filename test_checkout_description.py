@@ -56,6 +56,11 @@ class FixedPriceTests(unittest.TestCase):
         self.forbidden_mocks = [p.start() for p in self.forbidden]
         self._create_patch = mock.patch.object(stripe.checkout.Session, "create", self.create)
         self._create_patch.start()
+        # A known customer with no subscription and no open session.
+        for target, name in ((stripe.Subscription, "list"), (stripe.checkout.Session, "list")):
+            patcher = mock.patch.object(target, name, return_value=SimpleNamespace(data=[]))
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         self._create_patch.stop()
@@ -68,7 +73,10 @@ class FixedPriceTests(unittest.TestCase):
         use_store(None)
 
     def checkout(self) -> object:
-        return self.client.post("/billing/checkout", json={})
+        from app.auth import issue_access_token
+
+        token = issue_access_token("cus_test_owner")
+        return self.client.post("/billing/checkout", json={}, headers={"Authorization": f"Bearer {token}"})
 
     def test_checkout_uses_the_configured_price_only(self) -> None:
         self.assertEqual(self.checkout().status_code, 200)
