@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     dev_bypass_billing: bool = False
     # Seconds a Stripe subscription lookup is reused; capped at 600 in app/subscriptions.py.
     subscription_cache_seconds: int = 300
+    # Shared state across processes (app/store.py) and outgoing mail (app/mail.py).
+    shared_store_url: str = ""
+    mail_backend: str = ""
+    # Use the first X-Forwarded-For address for rate limits. Only behind a proxy that sets it.
+    trust_forwarded_for: bool = False
     # Optional comma-separated Stripe ids that also count as LexShield Professional.
     stripe_authorized_product_ids: str = ""
     stripe_authorized_price_ids: str = ""
