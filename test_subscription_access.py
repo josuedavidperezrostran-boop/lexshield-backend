@@ -18,6 +18,7 @@ from app import billing, subscriptions
 from app.auth import REFRESH_WINDOW_SECONDS, TOKEN_TTL_SECONDS, _sign, customer_id_from_token
 from app.config import settings
 from app.main import app, require_subscription
+from app.store import MemoryStore, use_store
 
 CUSTOMER = "cus_test_owner"
 OTHER = "cus_test_other"
@@ -74,6 +75,8 @@ class _StripeCase(unittest.TestCase):
         settings.subscription_cache_seconds = 300
         os.environ.pop("RENDER", None)
         subscriptions.clear_cache()
+        use_store(MemoryStore())
+        self.addCleanup(use_store, None)
         self.client = TestClient(app)
         self.subscriptions_list = self._patch(stripe.Subscription, "list", return_value=_list())
         self.product_retrieve = self._patch(stripe.Product, "retrieve", return_value={"name": "Something else", "metadata": {}})
