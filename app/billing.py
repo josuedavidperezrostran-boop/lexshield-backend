@@ -108,8 +108,9 @@ def create_checkout_session() -> CheckoutResponse:
                         "product_data": {
                             "name": "LexShield Professional",
                             "description": (
-                                "Unlimited contract risk audits under Zero Data Retention. "
-                                "Processed in memory and purged after the audit."
+                                "Unlimited contract risk audits. Processed in memory and purged "
+                                "after the audit. Text is sent to an external AI provider "
+                                "(OpenAI) for analysis."
                             ),
                         },
                     },
