@@ -15,8 +15,8 @@ from .auditor import (
     scan_jurisdiction,
     supervise_matrix,
 )
-from .auth import token_is_valid
 from .billing import router as billing_router
+from .billing import state_for_authorization
 from .compare import compare_contracts
 from .config import settings
 from .extract import extract_text
@@ -56,12 +56,15 @@ app.include_router(paddle_webhook_router)
 def require_subscription(authorization: str | None = Header(default=None)) -> None:
     if settings.billing_bypass_enabled():
         return
-    scheme, _, token = (authorization or "").partition(" ")
-    if scheme.lower() != "bearer" or not token_is_valid(token):
+    state = state_for_authorization(authorization)
+    if state.access:
+        return
+    if state.payment_required:
         raise HTTPException(
-            status_code=401,
-            detail="LexShield Professional subscription required.",
+            status_code=402,
+            detail="Payment failed. Update the payment method in the customer portal.",
         )
+    raise HTTPException(status_code=403, detail="LexShield Professional subscription is not active.")
 
 
 @app.get("/health")
