@@ -66,7 +66,7 @@ configurar 100 USD ni el 80 %.
   `verification_notes`, `location` y `page_verified`.
 - `integrity` incluye `status` (`complete` | `incomplete` | `unreliable`), `status_label`, `message` y `limitations`
   (lista de frases), además de los contadores anteriores.
-Todos los campos nuevos son aditivos y el frontend tolera su ausencia. El acceso a `/analyze` lo decide la
+Desde la candidata 2, `rescued_findings` es una lista aparte de fichas del auditor que la revisión descartó sin motivo específico: `article`, `excerpt`, `risk`, `interpretation`, `discarded_by`, `discard_reason` (o null), `status` (siempre "Pendiente de revisión humana; no validado por el sistema"), `source_desk` y `location`. No son hallazgos confirmados. Todos los campos nuevos son aditivos y el frontend tolera su ausencia. El acceso a `/analyze` lo decide la
 dependencia `require_subscription` (de Cursor); el manejador (de Claude) no conoce proveedores.
 
 ## 4. Archivos asignados
@@ -74,7 +74,7 @@ dependencia `require_subscription` (de Cursor); el manejador (de Claude) no cono
 | Agente | Backend | Frontend |
 |---|---|---|
 | **Cursor** | `app/billing.py`, `app/auth.py`, `app/sessions.py`, `app/store.py`, `app/subscriptions.py`, `app/paddle_webhooks.py`, `app/webhooks.py`, `app/signup.py`, `app/recovery.py`, `app/mail.py`, `app/availability.py`, `app/partners.py`, archivos nuevos `app/paddle*.py`, y sus pruebas (`test_paddle_*`, `test_subscription_access`, `test_sessions_recovery`, `test_shared_store`, `test_checkout_*`, `test_stripe_*`, `test_billing_*`) | páginas y componentes de suscripción, acceso y cuenta (`app/subscribe`, `app/success`, `app/cancel`, recuperación), funciones de facturación de `lib/api.ts` |
-| **Claude** | `app/auditor.py`, `app/report_checks.py`, `app/extract.py`, `app/compare.py`, `app/playbook.py`, `eval/`, `test_report_checks.py`, `test_auditor_local_controls.py`, `test_integrity_status.py`, `test_excerpt_fallbacks.py`, `test_openai_errors.py`, `test_fixtures/` | `app/auditor/page.tsx`, `lib/reportPdf.ts`, `lib/reportView.ts`, tipos `AuditResponse`/`RiskFinding`/`AuditIntegrity`/`ContractMetadata` de `lib/api.ts` |
+| **Claude** | `app/auditor.py`, `app/report_checks.py`, `app/rescue.py`, `app/extract.py`, `app/compare.py`, `app/playbook.py`, `eval/`, `test_report_checks.py`, `test_auditor_local_controls.py`, `test_integrity_status.py`, `test_excerpt_fallbacks.py`, `test_openai_errors.py`, `test_rescue.py`, `test_prompt_freeze.py`, `test_fixtures/` | `app/auditor/page.tsx`, `lib/reportPdf.ts`, `lib/reportView.ts`, tipos `AuditResponse`/`RiskFinding`/`AuditIntegrity`/`ContractMetadata` de `lib/api.ts` |
 | **Compartidos** | `app/main.py` (Cursor: `require_subscription` y routers; Claude: manejadores `/analyze` y `/api/contracts/compare`), `app/config.py` (cada uno añade solo sus variables), `requirements.txt` (ninguno añade dependencias sin autorización del usuario) | `lib/api.ts` (por secciones, como arriba), `lib/copy.ts` (Claude solo las claves del informe) |
 
 Reglas para los compartidos: cambios pequeños, dentro de su sección, anotados en el registro de abajo; quien
@@ -119,3 +119,4 @@ facturación de `lib/api.ts` y `lib/copy.ts`.
 - 2026-10-30 · Claude · versión inicial.
 - 2026-10-30 · Claude · sección 6: candidata integrada del auditor, conflicto conocido en `app/main.py`, pausa de
   llamadas a OpenAI y modo simulado para las pruebas de pago.
+- 2026-10-30 · Claude · candidata 2: `rescued_findings` en `/analyze`, `app/rescue.py`; ramas `integration/auditor-candidate-2` (`5322124`, 168 pruebas) e `integration/report-candidate-2` (`c4319f5`). `app/main.py` (`_review_with_critic`) pasa las fichas del auditor al supervisor.
