@@ -88,6 +88,34 @@ del usuario, ni toca los cambios sin commit de `C:\Users\josue\LexShield\backend
 (frontend). Están en `C:\Users\josue\lexshield-worktrees\`, en local y sin push. Ninguna toca archivos de Cursor salvo
 `app/main.py` (el manejador `/analyze`: informe de páginas PDF y ubicaciones).
 
+## 6. Candidata integrada del auditor y cómo encaja el trabajo de Paddle
+
+Ramas locales, sin push:
+- backend `integration/auditor-candidate-1` (`971588d`, worktree `backend-integration`) = `origin/main` +
+  `fix/openai-quota-honest-error` + etiqueta `auditor-candidata-1` + `fix/test-cors-order-independent`. 154 pruebas en
+  verde.
+- frontend `integration/report-candidate-1` (`021d2bd`, worktree `frontend-integration`) = `origin/main` +
+  `fix/report-evidence-and-states`. `tsc`, `eslint` y `next build` correctos.
+
+La candidata **no incluye la pila de facturación**. `/billing/status` todavía anuncia `amount_usd: 100` y
+`founder_code: FOUNDER80`, que vienen de `main`. Corregirlo es tarea de Cursor dentro de su rama.
+
+Para integrar Paddle encima de la candidata, con `git merge-tree` ya comprobado:
+- con la cima de la pila (`feat/email-verified-checkout`) solo choca `app/main.py`, en los `import`: se conservan
+  `pdf_page_report` y los routers `recovery` y `signup`;
+- `fix/test-cors-order-independent` cambia `_allowed_origins` en `app/main.py`; si Cursor toca CORS, debe partir de
+  esa versión.
+
+**No hacer llamadas a OpenAI** en las pruebas de Paddle: el usuario las ha pausado para conservar saldo. Para
+recorrer el flujo de pago con análisis, la rama `feat/simulated-analysis-for-tests` (`9557ba7`) ofrece
+`ANALYSIS_BACKEND=simulated`. Solo se activa con un `ENVIRONMENT` explícito y sin claves en vivo. En el frontend
+existe el banner correspondiente (`feat/simulated-analysis-banner`).
+
+Lo que Claude **no** tocará mientras Cursor trabaja: todo lo asignado a Cursor en la sección 4, y la sección de
+facturación de `lib/api.ts` y `lib/copy.ts`.
+
 ## Registro de cambios del contrato
 
 - 2026-10-30 · Claude · versión inicial.
+- 2026-10-30 · Claude · sección 6: candidata integrada del auditor, conflicto conocido en `app/main.py`, pausa de
+  llamadas a OpenAI y modo simulado para las pruebas de pago.
