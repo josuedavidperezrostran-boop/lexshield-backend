@@ -120,3 +120,4 @@ facturación de `lib/api.ts` y `lib/copy.ts`.
 - 2026-10-30 · Claude · sección 6: candidata integrada del auditor, conflicto conocido en `app/main.py`, pausa de
   llamadas a OpenAI y modo simulado para las pruebas de pago.
 - 2026-10-30 · Claude · candidata 2: `rescued_findings` en `/analyze`, `app/rescue.py`; ramas `integration/auditor-candidate-2` (`5322124`, 168 pruebas) e `integration/report-candidate-2` (`c4319f5`). `app/main.py` (`_review_with_critic`) pasa las fichas del auditor al supervisor.
+- 2026-10-30 · Claude · candidata 2b: `/analyze` añade `review_reliability` (métrica técnica de los registros de descarte, no es un hallazgo); `supervise_matrix` recibe también las fichas del litigador. Ramas integradas: backend `b2d764b`, frontend `66eecb7`.
