@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,6 +10,8 @@ ENV_FILE = ROOT_DIR / ".env"
 
 load_dotenv(ENV_FILE, override=False)
 
+DEFAULT_TOKEN_SECRET = "change-me-in-production"
+
 
 class Settings(BaseSettings):
     openai_api_key: str = ""
@@ -17,7 +20,7 @@ class Settings(BaseSettings):
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
     partners_db_path: str = ""
-    access_token_secret: str = "change-me-in-production"
+    access_token_secret: str = DEFAULT_TOKEN_SECRET
     frontend_origin: str = "https://frontend-1-lex-shield2.vercel.app"
     backend_origin: str = "http://localhost:8000"
     subscription_amount_cents: int = 10_000
@@ -25,6 +28,8 @@ class Settings(BaseSettings):
     # One gpt-4o pass. Leaves room inside the 128k window for the system prompt and the reply.
     max_contract_chars: int = 320_000
     dev_bypass_billing: bool = False
+    # "production" turns off every dev shortcut. Render also sets RENDER=true on its hosts.
+    environment: str = ""
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
@@ -35,6 +40,19 @@ class Settings(BaseSettings):
 
     def openai_key(self) -> str:
         return self.openai_api_key.strip()
+
+    def is_production(self) -> bool:
+        if self.environment.strip().lower() in {"production", "prod"}:
+            return True
+        return os.environ.get("RENDER", "").strip().lower() == "true"
+
+    def billing_bypass_enabled(self) -> bool:
+        """The demo bypass only works off production, whatever DEV_BYPASS_BILLING says."""
+        return self.dev_bypass_billing and not self.is_production()
+
+    def token_secret_is_safe(self) -> bool:
+        secret = self.access_token_secret.strip()
+        return bool(secret) and secret != DEFAULT_TOKEN_SECRET
 
 
 settings = Settings()

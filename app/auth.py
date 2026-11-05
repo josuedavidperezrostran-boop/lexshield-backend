@@ -10,13 +10,22 @@ from .config import settings
 TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 
 
+def tokens_available() -> bool:
+    """In production a missing or default ACCESS_TOKEN_SECRET would let anyone forge tokens."""
+    return settings.token_secret_is_safe() or not settings.is_production()
+
+
 def issue_access_token(customer_id: Optional[str] = None) -> str:
+    if not tokens_available():
+        raise RuntimeError("ACCESS_TOKEN_SECRET must be set to a private value in production.")
     issued_at = str(int(time.time()))
     payload = f"{issued_at}.{customer_id}" if customer_id else issued_at
     return f"{payload}.{_sign(payload)}"
 
 
 def token_is_valid(token: Optional[str]) -> bool:
+    if not tokens_available():
+        return False
     payload = _signed_payload(token)
     if payload is None:
         return False
@@ -29,6 +38,8 @@ def token_is_valid(token: Optional[str]) -> bool:
 
 
 def customer_id_from_token(token: Optional[str]) -> Optional[str]:
+    if not tokens_available():
+        return None
     payload = _signed_payload(token)
     if not payload or "." not in payload:
         return None

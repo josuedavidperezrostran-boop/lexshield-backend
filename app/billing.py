@@ -4,7 +4,7 @@ import stripe
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from .auth import customer_id_from_token, issue_access_token, token_is_valid
+from .auth import customer_id_from_token, issue_access_token, token_is_valid, tokens_available
 from .config import settings
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -74,7 +74,7 @@ def billing_status() -> dict[str, object]:
         "amount_usd": settings.subscription_amount_cents // 100,
         "founder_code": FOUNDER_PROMO_CODE,
         "interval": "month",
-        "checkout_required": not settings.dev_bypass_billing,
+        "checkout_required": not settings.billing_bypass_enabled(),
         "stripe_configured": stripe_is_configured(),
     }
 
@@ -128,8 +128,13 @@ def create_checkout_session() -> CheckoutResponse:
 
 @router.post("/verify", response_model=AccessResponse)
 def verify_checkout(body: VerifyRequest) -> AccessResponse:
+    if not tokens_available():
+        raise HTTPException(
+            status_code=503,
+            detail="ACCESS_TOKEN_SECRET is not configured for production.",
+        )
     if body.bypass:
-        if not settings.dev_bypass_billing:
+        if not settings.billing_bypass_enabled():
             raise HTTPException(
                 status_code=403,
                 detail="Billing bypass is disabled. Complete Stripe Checkout.",
