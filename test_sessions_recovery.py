@@ -98,8 +98,9 @@ class RevocationTests(_Case):
         self.assertEqual(self.client.post("/billing/logout", headers=_auth(mine)).status_code, 200)
         self.assertEqual(self.me(mine), 401)
         self.assertEqual(self.refresh(mine).status_code, 401)
-        self.assertEqual(self.client.post("/billing/checkout", headers=_auth(mine)).status_code, 200)
-        self.assertNotIn("customer", self.create.call_args.kwargs)  # revoked token no longer identifies
+        # A revoked token no longer identifies anyone, so it cannot open Checkout either.
+        self.assertEqual(self.client.post("/billing/checkout", headers=_auth(mine)).status_code, 401)
+        self.create.assert_not_called()
         self.assertEqual(self.me(other_device), 200)
 
     def test_logout_reaches_renewed_tokens_of_the_session(self) -> None:

@@ -274,13 +274,16 @@ class CheckoutCoordinationTests(unittest.TestCase):
             self.assertEqual(_checkout_once(self.token), "HTTP 409")
         self.assertEqual(self.fake.count(), 0)
 
-    def test_known_gap_anonymous_visitors_are_not_coordinated(self) -> None:
-        # Documented, unresolved: without a token there is no identity to coordinate on.
+    def test_visitors_without_token_cannot_open_checkout(self) -> None:
+        # They verify their email first (app/signup.py), which yields a known customer.
+        from fastapi import HTTPException
+
         from app import billing
 
-        billing.create_checkout_session(authorization=None)
-        billing.create_checkout_session(authorization=None)
-        self.assertEqual(self.fake.count(), 2)
+        with self.assertRaises(HTTPException) as caught:
+            billing.create_checkout_session(authorization=None)
+        self.assertEqual(caught.exception.status_code, 401)
+        self.assertEqual(self.fake.count(), 0)
 
 
 if __name__ == "__main__":

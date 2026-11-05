@@ -407,20 +407,18 @@ class CheckoutTests(_StripeCase):
         self.assertEqual(response.json()["checkout_url"], "https://checkout.stripe.com/c/pay/cs_test_open")
         self.create.assert_not_called()
 
-    def test_browser_supplied_ids_and_emails_are_ignored(self) -> None:
+    def test_browser_supplied_ids_and_emails_do_not_identify_anyone(self) -> None:
         response = self._checkout(json={"customer_id": OTHER, "subscription_id": "sub_x", "email": "victim@example.com"})
-        self.assertEqual(response.status_code, 200)
-        kwargs = self.create.call_args.kwargs
-        self.assertNotIn("customer", kwargs)
-        self.assertNotIn("customer_email", kwargs)
+        self.assertEqual(response.status_code, 401)
+        self.create.assert_not_called()
         self.customers.assert_not_called()
         self.subscriptions_list.assert_not_called()
 
-    def test_anonymous_checkout_reveals_nothing_about_emails(self) -> None:
+    def test_checkout_without_token_reveals_nothing_about_emails(self) -> None:
         self.customers.return_value = _list({"id": CUSTOMER})
         self.subs(_sub("active"))
         responses = {self._checkout(json={"email": e}).status_code for e in ("owner@example.com", "nobody@example.com")}
-        self.assertEqual(responses, {200})
+        self.assertEqual(responses, {401})
         self.customers.assert_not_called()
 
     def test_repeated_requests_share_an_idempotency_key(self) -> None:
