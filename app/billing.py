@@ -9,16 +9,18 @@ import stripe
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import subscriptions
+from . import sessions, subscriptions
 from .auth import (
+    TokenInfo,
     bearer_token,
-    customer_id_from_token,
     issue_access_token,
+    parse_token,
     token_is_refreshable,
     token_is_valid,
     tokens_available,
 )
 from .config import settings
+from .store import StoreUnavailable
 from .subscriptions import PRODUCT_KEY, AccessState, SubscriptionLookupError
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -125,19 +127,48 @@ def _object_id(value: Any) -> str | None:
     return value if isinstance(value, str) else _get(value, "id")
 
 
-def state_for_authorization(authorization: str | None) -> AccessState:
-    """Stripe access state for the customer named by a current bearer token."""
+def _session_active(info: TokenInfo) -> bool:
+    try:
+        return sessions.session_is_active(info)
+    except StoreUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not confirm the session right now. Try again shortly.",
+        ) from None
+
+
+def current_session(authorization: str | None) -> TokenInfo:
+    """A current, unrevoked token that names a customer, or 401 (503 if the store is down)."""
     token = bearer_token(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="LexShield Professional subscription required.")
     # Only a current token is accepted here; renewal-stage tokens work at /billing/refresh only.
     if not token_is_valid(token):
         raise HTTPException(status_code=401, detail="Session expired. Renew it at /billing/refresh.")
-    customer_id = customer_id_from_token(token)
-    if not customer_id:
+    info = parse_token(token)
+    if info is None or not info.customer_id:
         raise HTTPException(status_code=401, detail="LexShield Professional subscription required.")
+    if not _session_active(info):
+        raise HTTPException(status_code=401, detail="This session was signed out.")
+    return info
+
+
+def renewable_session(authorization: str | None) -> TokenInfo | None:
+    """A renewal-stage (or newer), unrevoked token inside its session limit, else None."""
+    token = bearer_token(authorization)
+    if not token or not token_is_refreshable(token):
+        return None
+    info = parse_token(token)
+    if info is None or not _session_active(info):
+        return None
+    return info
+
+
+def state_for_authorization(authorization: str | None) -> AccessState:
+    """Stripe access state for the customer named by a current bearer token."""
+    info = current_session(authorization)
     _require_stripe()
-    return _lookup(customer_id)
+    return _lookup(info.customer_id)
 
 
 @router.get("/status")
@@ -199,8 +230,8 @@ def create_checkout_session(authorization: str | None = Header(default=None)) ->
     and Stripe collects the email; looking that email up here would reveal who subscribes.
     """
     _require_stripe()
-    token = bearer_token(authorization)
-    customer_id = customer_id_from_token(token) if token and token_is_refreshable(token) else None
+    signed_in = renewable_session(authorization)
+    customer_id = signed_in.customer_id if signed_in else None
 
     lock = _customer_lock(customer_id) if customer_id else threading.Lock()
     with lock:
@@ -328,18 +359,42 @@ def refresh_access(authorization: str | None = Header(default=None)) -> AccessRe
     paused). The new token still carries no access: each call re-checks the subscription.
     """
     _require_tokens()
-    token = bearer_token(authorization)
-    if not token or not token_is_refreshable(token):
+    info = renewable_session(authorization)
+    if info is None:
         raise HTTPException(
             status_code=401,
             detail="This session can no longer be renewed. Recover access by email.",
         )
-    customer_id = customer_id_from_token(token)
     _require_stripe()
-    state = _lookup(customer_id, fresh=True)
+    state = _lookup(info.customer_id, fresh=True)
     if not state.has_open_subscription:
         raise HTTPException(status_code=403, detail="No LexShield subscription to renew for this customer.")
-    return AccessResponse(access_token=issue_access_token(customer_id), subscription=state.as_dict())
+    # Same session and same start: renewal never extends the session limit.
+    token = issue_access_token(info.customer_id, auth_at=info.auth_at, session_id=info.session_id)
+    return AccessResponse(access_token=token, subscription=state.as_dict())
+
+
+@router.post("/logout")
+def logout(authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    """Revoke this session everywhere. Accepts renewal-stage tokens so old devices can sign out."""
+    info = renewable_session(authorization)
+    if info is not None:
+        try:
+            sessions.revoke_session(info)
+        except StoreUnavailable:
+            raise HTTPException(status_code=503, detail="Could not sign out right now. Try again.") from None
+    return {"signed_out": True}
+
+
+@router.post("/sessions/revoke-all")
+def revoke_all_sessions(authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    """Sign this customer out on every device, including this one."""
+    info = current_session(authorization)
+    try:
+        sessions.revoke_all(info.customer_id)
+    except StoreUnavailable:
+        raise HTTPException(status_code=503, detail="Could not sign out right now. Try again.") from None
+    return {"signed_out": True}
 
 
 class PortalResponse(BaseModel):
@@ -370,18 +425,7 @@ def ensure_portal_configuration() -> str:
 @router.post("/portal", response_model=PortalResponse)
 def create_portal_session(authorization: str | None = Header(default=None)) -> PortalResponse:
     _require_stripe()
-    token = bearer_token(authorization)
-    if not token or not token_is_valid(token):
-        raise HTTPException(
-            status_code=401,
-            detail="LexShield Professional subscription required.",
-        )
-    customer_id = customer_id_from_token(token)
-    if not customer_id:
-        raise HTTPException(
-            status_code=409,
-            detail="Finish Stripe Checkout once so this session can open the customer portal.",
-        )
+    customer_id = current_session(authorization).customer_id
 
     try:
         configuration = ensure_portal_configuration()
