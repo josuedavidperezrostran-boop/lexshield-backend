@@ -137,6 +137,9 @@ def subscription_is_authorized(subscription: Any) -> bool:
         return True
     items = _get(_get(subscription, "items"), "data") or []
     price_ids = _ids(settings.stripe_authorized_price_ids)
+    configured = settings.stripe_price_id()
+    if configured:
+        price_ids.add(configured)
     for item in items:
         price = _get(item, "price") or {}
         if _get(price, "id") in price_ids:
