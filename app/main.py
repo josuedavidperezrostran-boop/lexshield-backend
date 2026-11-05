@@ -39,13 +39,17 @@ def _allowed_origins() -> list[str]:
     return [configured]
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_allowed_origins(),
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+def cors_options() -> dict[str, object]:
+    """CORS settings, read from the current configuration (tests rebuild them after changing it)."""
+    return {
+        "allow_origins": _allowed_origins(),
+        "allow_credentials": True,
+        "allow_methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["*"],
+    }
+
+
+app.add_middleware(CORSMiddleware, **cors_options())
 
 app.include_router(billing_router)
 app.include_router(billing_router, prefix="/api")
